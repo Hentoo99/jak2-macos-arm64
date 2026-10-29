@@ -23,6 +23,12 @@
 
 #include "third-party/CLI11.hpp"
 
+#include "common/platform/BuildConfig.h"
+#if OG_TARGET_IOS
+// On iOS, SDL starts the UIKit application and then calls this file's main() (renamed SDL_main).
+#include "third-party/SDL/include/SDL3/SDL_main.h"
+#endif
+
 #ifdef _WIN32
 extern "C" {
 __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;

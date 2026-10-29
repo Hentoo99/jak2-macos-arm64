@@ -51,10 +51,12 @@ const char* bank_name(goal_aot_bank_kind kind) {
 }  // namespace
 
 void fatal(const char* fmt_message, const char* arg) {
-  std::fprintf(stderr, "[signed-aot] FATAL: ");
-  std::fprintf(stderr, fmt_message, arg);
-  std::fprintf(stderr, "\n");
+  // Also in the game log: an iOS app has no console.
+  char message[512];
+  std::snprintf(message, sizeof(message), fmt_message, arg);
+  std::fprintf(stderr, "[signed-aot] FATAL: %s\n", message);
   std::fflush(stderr);
+  lg::die("[signed-aot] FATAL: {}", message);
   std::abort();
 }
 
@@ -88,17 +90,16 @@ void verify_module_object(const goal_aot_module& module, const u8* object, u32 s
   memcpy(bytes.data(), "GOAL", 4);
   const auto actual = sha256::hex_digest(bytes);
   if (actual != module.sha256) {
-    std::fprintf(stderr, "[signed-aot] %s: object sha256 %s, signed module expects %s\n",
-                 module.name, actual.c_str(), module.sha256);
+    lg::error("[signed-aot] {}: object sha256 {}, signed module expects {}", module.name, actual,
+              module.sha256);
     fatal("object %s does not match its signed code; rebuild the AOT image", module.name);
   }
 }
 
 void verify_function_type(u32 runtime_function_type) {
   if (runtime_function_type != goal_aot_function_type) {
-    std::fprintf(stderr,
-                 "[signed-aot] runtime function type is %#x, signed code was emitted with %#x\n",
-                 runtime_function_type, goal_aot_function_type);
+    lg::error("[signed-aot] runtime function type is {:#x}, signed code was emitted with {:#x}",
+              runtime_function_type, goal_aot_function_type);
     char value[16];
     std::snprintf(value, sizeof(value), "%#x", runtime_function_type);
     fatal("function type mismatch: re-run jak2-aot-emit with --function-type %s", value);

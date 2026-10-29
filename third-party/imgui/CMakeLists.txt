@@ -8,6 +8,9 @@ set(IMGUI_SOURCES
         imgui_style.cpp)
 if(NOT OG_TARGET_IOS)
         list(APPEND IMGUI_SOURCES imgui_impl_opengl3.cpp)
+elseif(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+        # iOS: the OpenGL3 backend on ANGLE's GLES headers, not Apple's OpenGLES framework.
+        list(APPEND IMGUI_SOURCES imgui_impl_opengl3_angle.cpp)
 endif()
 add_library(imgui ${IMGUI_SOURCES})
 

@@ -296,3 +296,42 @@ Strumenti di sviluppo, sempre disponibili e inattivi senza variabili d'ambiente:
 
 Le prove con Shadow2 a liste di triangoli e con i fan di TextureAnimator convertiti non hanno
 cambiato nulla e sono state annullate.
+
+---
+
+## Fase 4 (avvio) — Jak 2 nel Simulatore iOS (2026-10-29)
+
+`scripts/run_jak2_ios_simulator.sh` compila `build-ios-sim`: iOS 17+, simulatore arm64, AOT con
+GLES, ANGLE `iphonesimulator-arm64` e linking statico. Poi firma ad-hoc, installa e avvia l'app
+sul simulatore (default "iPad Pro 11-inch (M5)"). Per ora i dati del gioco si leggono dal repo
+con `--proj-path`.
+
+Cosa è servito per iOS:
+- `game/ios/Info.plist.in`: app iOS a schermo intero in landscape, iPhone e iPad, Files
+  sharing.
+- I framework ANGLE copiati in `gk.app/Frameworks`, con rpath `@executable_path/Frameworks`.
+- `main.cpp` include `SDL_main.h` su iOS: SDL avvia UIKit e poi chiama il `main` del gioco.
+- **SDL senza OpenGL/OpenGLES su iOS.** Altrimenti SDL linka il framework OpenGLES di Apple e i
+  suoi simboli `gl*` oscurano quelli di ANGLE: ImGui riceveva `glGetString` NULL e andava in
+  crash.
+- ImGui OpenGL3 su iOS tramite `imgui_impl_opengl3_angle.cpp`, che usa gli header GLES3 di
+  ANGLE invece di quelli OpenGLES di Apple.
+- `discord_jak2.cpp` (tabelle dei livelli) e `tools/` restano nelle build GLES iOS, perché li
+  usa la GUI di debug del renderer.
+- `signed_aot::fatal` scrive anche nel log del gioco, perché su iOS non c'è una console.
+
+Risultato sul simulatore iPad Pro 11" (M5), iOS 27:
+- **Jak 2 si avvia e arriva al titolo** ("Press the Start Button", Haven City), con
+  title/ctywide/lwidea/ctysluma caricati.
+- **Audit della memoria eseguibile nel processo iOS** (interposizione di `mmap`/`mprotect`,
+  compilata per il simulatore): `mmap(PROT_EXEC)=0`, `mmap(MAP_JIT)=0`, `mprotect(PROT_EXEC)=0`.
+  L'SDK iOS non espone nemmeno `pthread_jit_write_protect_np`.
+- La compilazione degli shader da parte di ANGLE all'avvio richiede circa 30 s nel simulatore.
+  Va misurata sul dispositivo; se serve, si aggiunge una cache dei binari dei programmi.
+
+Prossimi passi:
+- pack dati nella sandbox, al posto di `--proj-path`;
+- controlli touch e gamepad;
+- audio (oggi stub muto);
+- dispositivo fisico (iPad Air 5, iPhone);
+- i difetti grafici GLES ancora aperti.

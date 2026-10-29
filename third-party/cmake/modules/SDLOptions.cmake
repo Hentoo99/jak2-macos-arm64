@@ -16,6 +16,12 @@ set(SDL_ATOMIC ON CACHE BOOL "" FORCE)
 set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_VIDEO ON CACHE BOOL "" FORCE)
 set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+if(OG_TARGET_IOS)
+    # iOS draws through a Metal view; OpenGL ES comes from ANGLE.  SDL's own GL support would link
+    # Apple's OpenGLES framework, whose gl* symbols then shadow ANGLE's.
+    set(SDL_OPENGL OFF CACHE BOOL "" FORCE)
+    set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
+endif()
 set(SDL_EVENTS ON CACHE BOOL "" FORCE)
 set(SDL_JOYSTICK ON CACHE BOOL "" FORCE)
 set(SDL_HAPTIC ON CACHE BOOL "" FORCE)

@@ -227,8 +227,13 @@ if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
 endif()
 
 if(OG_TARGET_IOS)
-    list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^external/discord")
-    list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^tools/")
+    # discord_jak2.cpp is only level-name tables, which the OpenGL renderer's debug GUI also uses.
+    list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^external/discord\\.cpp$")
+    if(NOT OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+        list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^external/discord")
+        # The OpenGL renderer's debug GUI uses the filter menu and the subtitle editor.
+        list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^tools/")
+    endif()
     list(APPEND RUNTIME_SOURCE external/discord_ios_stub.cpp)
 endif()
 
@@ -343,6 +348,29 @@ if(APPLE AND (CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR CMAKE_OSX_ARCHITECTURES 
     if(OG_EXECUTION_MODE_DYNAMIC)
         set_target_properties(gk PROPERTIES
             XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/macos/jak-jit.entitlements")
+    endif()
+endif()
+if(OG_TARGET_IOS)
+    # iOS app bundle: flat layout, frameworks in gk.app/Frameworks.
+    string(TOLOWER "${CMAKE_OSX_SYSROOT}" OG_IOS_SYSROOT_LOWER)
+    if(OG_IOS_SYSROOT_LOWER MATCHES "iphonesimulator")
+        set(OG_IOS_PLATFORM_NAME iPhoneSimulator)
+    else()
+        set(OG_IOS_PLATFORM_NAME iPhoneOS)
+    endif()
+    set(OG_IOS_BUNDLE_ID "org.opengoal.jak2" CACHE STRING "iOS bundle identifier")
+    set_target_properties(gk PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
+        BUILD_RPATH "@executable_path/Frameworks"
+        INSTALL_RPATH "@executable_path/Frameworks")
+    if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+        foreach(OG_ANGLE_FRAMEWORK libEGL libGLESv2)
+            add_custom_command(TARGET gk POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        "${OPENGOAL_ANGLE_DIR}/${OG_ANGLE_FRAMEWORK}.framework"
+                        "$<TARGET_BUNDLE_DIR:gk>/Frameworks/${OG_ANGLE_FRAMEWORK}.framework"
+                VERBATIM)
+        endforeach()
     endif()
 endif()
 if(WIN32)

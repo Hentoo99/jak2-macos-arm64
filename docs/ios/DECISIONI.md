@@ -362,3 +362,31 @@ Prossimi passi:
   (profilo di 7 giorni generato da Xcode tramite un'app stub), installa con `devicectl`, copia il
   pack in `Documents/jak2` e avvia l'app. Il profilo per iPhone e iPad è già stato generato e
   scade il 2026-11-05.
+
+### Difetti grafici GLES (ANGLE/Metal)
+
+Visti sull'iPhone e riprodotti sul Mac con `build-arm64-gles`. Il metodo: confronto a fotogramma
+fisso con il GL desktop (`OPENGOAL_SCREENSHOT_FRAMES`) e renderer spenti a metà scena
+(`OPENGOAL_DISABLE_RENDERERS_AT`).
+
+- **Scie e nuvole verdi (prigione), insegne al neon assenti (Haven).**
+  - Causa: il backend Metal di ANGLE ignora il primitive restart (`UINT32_MAX`) quando una strip
+    indicizzata legge un vertex buffer non `GL_STATIC_DRAW`. Le strip consecutive si uniscono in
+    triangoli lunghi.
+  - Restano corretti tfrag, TIE e shrub, che hanno vertici statici.
+  - Il usage hint degli index buffer non cambia nulla; quello dei vertex buffer sì, ma forzarlo a
+    statico rompe altro.
+  - Correzione: Sprite3 disegna ogni sprite come due triangoli. In più `gles_compat` tiene una
+    copia degli index buffer non statici e, per quelle draw, usa una lista di triangoli costruita
+    una volta per upload.
+- **Sprite 2D e `xy_array`.** Lo shader indicizza `xy_array[vert_id + flag]` oltre gli 8
+  elementi, come la VU (`cdata`: xy, st, xyz, hmge). Ora si caricano tutti i 17 vettori, così
+  le letture sono definite su ogni backend.
+- **Glow visibili attraverso i muri.**
+  - Causa: la texture di profondità delle sonde era campionata con `GL_LINEAR`. In ES 3.0 una
+    texture di profondità non è filtrabile, quindi è incompleta e si legge 0: ogni sonda passa il
+    test.
+  - Correzione: `GL_NEAREST` su GLES.
+- **Shader su iPhone.** Gli shader ES stanno in `Documents/jak2/out/gles-shaders`.
+  `install_jak2_ios_device.sh` ora li copia a ogni installazione, anche con `SKIP_DATA=1`.
+  `LAUNCH=0` installa senza aprire l'app.

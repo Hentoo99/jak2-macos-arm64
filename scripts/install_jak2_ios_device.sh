@@ -10,7 +10,8 @@
 # asks to let codesign use the development key.  Free-team profiles last 7 days: rerun this script.
 #
 # Environment: TEAM_ID (default M7AU52VUR3, the personal team), BUNDLE_ID (com.ermadev.jak2),
-# SKIP_DATA=1 to reinstall the app without copying the data pack again.
+# SKIP_DATA=1 to reinstall the app without copying the data pack again (the shaders, rebuilt with
+# the app, are always copied), LAUNCH=0 to install without launching.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -145,22 +146,30 @@ echo "signed with $IDENTITY"
 
 # --- install, data, launch -----------------------------------------------------------------------
 xcrun devicectl device install app --device "$DEVICE" "$APP"
+# One folder at a time, with retries: a single 2.7 GB transfer drops the device connection.
+copy_to_device() {  # SOURCE_DIR DESTINATION_UNDER_DOCUMENTS_JAK2
+  for attempt in 1 2 3; do
+    if xcrun devicectl device copy to --device "$DEVICE" --domain-type appDataContainer \
+      --domain-identifier "$BUNDLE_ID" --source "$1" --destination "Documents/jak2/$2" \
+      >/dev/null 2>&1; then
+      echo "  copied $2"
+      return
+    fi
+    echo "  retrying $2"
+  done
+  echo "could not copy $2" >&2
+  exit 1
+}
 if [ "${SKIP_DATA:-0}" != 1 ]; then
   [ -d out/ios-data/jak2 ] || scripts/make_jak2_ios_data_pack.sh
   echo "copying the data pack (about 2.7 GB)..."
-  # One folder at a time, with retries: a single 2.7 GB transfer drops the device connection.
-  for part in out/gles-shaders game/assets out/jak2-arm64/fr3 out/jak2-arm64/obj out/jak2-arm64/iso; do
-    for attempt in 1 2 3; do
-      if xcrun devicectl device copy to --device "$DEVICE" --domain-type appDataContainer \
-        --domain-identifier "$BUNDLE_ID" --source "out/ios-data/jak2/$part" \
-        --destination "Documents/jak2/$part" >/dev/null 2>&1; then
-        echo "  copied $part"
-        break
-      fi
-      [ "$attempt" = 3 ] && { echo "could not copy $part" >&2; exit 1; }
-      echo "  retrying $part"
-    done
+  for part in game/assets out/jak2-arm64/fr3 out/jak2-arm64/obj out/jak2-arm64/iso; do
+    copy_to_device "out/ios-data/jak2/$part" "$part"
   done
 fi
-xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE_ID"
-echo "launched $BUNDLE_ID on $DEVICE"
+# The shaders are generated with the runtime: copy the current ones with every install.
+copy_to_device out/gles-shaders out/gles-shaders
+if [ "${LAUNCH:-1}" != 0 ]; then
+  xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE_ID"
+  echo "launched $BUNDLE_ID on $DEVICE"
+fi

@@ -53,6 +53,8 @@ class Compiler {
            std::unique_ptr<REPL::Wrapper> repl = nullptr);
   ~Compiler();
   void asm_file(const CompilationOptions& options);
+  //! ARM64 code model: see emitter::ObjectGenerator::set_arm64_page_relative.
+  void set_arm64_page_relative(bool enable) { m_arm64_page_relative = enable; }
 
   void save_repl_history();
   void print_to_repl(const std::string& str);
@@ -121,6 +123,7 @@ class Compiler {
  private:
   GameVersion m_version;
   emitter::InstructionSet m_instr_set;
+  bool m_arm64_page_relative = false;
   TypeSystem m_ts;
   std::unique_ptr<GlobalEnv> m_global_env = nullptr;
   std::unique_ptr<None> m_none = nullptr;

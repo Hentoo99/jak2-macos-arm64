@@ -22,7 +22,7 @@ std::vector<u8> make_code(u32 base) {
 }  // namespace
 
 TEST(RelocationModel, SerializeRoundTrip) {
-  for (int t = 1; t <= 9; t++) {
+  for (int t = 1; t <= 10; t++) {
     Relocation r{static_cast<RelocationType>(t), 12345, -0x12345678};
     auto data = serialize_relocation(r);
     ASSERT_TRUE(data.has_value());
@@ -37,12 +37,12 @@ TEST(RelocationModel, SerializeRoundTrip) {
 
 TEST(RelocationModel, UnknownTypeRejected) {
   EXPECT_FALSE(serialize_relocation({static_cast<RelocationType>(0), 0, 0}).has_value());
-  EXPECT_FALSE(serialize_relocation({static_cast<RelocationType>(10), 0, 0}).has_value());
+  EXPECT_FALSE(serialize_relocation({static_cast<RelocationType>(11), 0, 0}).has_value());
   EXPECT_FALSE(serialize_relocation({static_cast<RelocationType>(255), 0, 0}).has_value());
   // deserialize: unknown tag and truncated payloads rejected.
   std::vector<u8> bad = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   EXPECT_FALSE(deserialize_relocation(bad).has_value());
-  std::vector<u8> bad2 = {10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  std::vector<u8> bad2 = {11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   EXPECT_FALSE(deserialize_relocation(bad2).has_value());
   std::vector<u8> short_data = {1, 2, 3};
   EXPECT_FALSE(deserialize_relocation(short_data).has_value());
@@ -105,6 +105,47 @@ TEST(RelocationModel, AdrpPage21) {
   // one past -> rejected
   EXPECT_FALSE(apply_relocation(RelocationType::Arm64AdrpPage21, code.data(), 0, pc, max_target + 0x1000, 0, &err));
   EXPECT_NE(err.find("out of range"), std::string::npos);
+}
+
+TEST(RelocationModel, AdrpPage21UnalignedTargets) {
+  auto code = make_code(0x90000000);
+  auto page_delta = [&]() {
+    u32 w = read_word(code, 0);
+    u32 raw = (((w >> 5) & 0x7FFFF) << 2) | ((w >> 29) & 0b11);
+    return (s64)(raw ^ (1u << 20)) - (s64)(1u << 20);  // sign-extend 21 bits
+  };
+  // A target in the middle of a page resolves to that page, wherever the
+  // instruction sits inside its own page.
+  s64 pc = 0x1FFC;
+  EXPECT_TRUE(apply_relocation(RelocationType::Arm64AdrpPage21, code.data(), 0, pc, 0x3008, 0,
+                               nullptr));
+  EXPECT_EQ(page_delta(), 2);
+  pc = 0x1004;
+  EXPECT_TRUE(apply_relocation(RelocationType::Arm64AdrpPage21, code.data(), 0, pc, 0x1FF8, 0,
+                               nullptr));
+  EXPECT_EQ(page_delta(), 0);
+  // Backward targets just below the PC page round down, not toward zero.
+  pc = 0x5000;
+  EXPECT_TRUE(apply_relocation(RelocationType::Arm64AdrpPage21, code.data(), 0, pc, 0x4FF8, 0,
+                               nullptr));
+  EXPECT_EQ(page_delta(), -1);
+}
+
+TEST(RelocationModel, Ldr64Lo12) {
+  auto code = make_code(0xF9400000);
+  s64 pc = 0x1000;
+  // imm12 holds the page offset divided by 8.
+  EXPECT_TRUE(apply_relocation(RelocationType::Arm64Ldr64Lo12, code.data(), 0, pc, 0x3238, 0,
+                               nullptr));
+  EXPECT_EQ((read_word(code, 0) >> 10) & 0xFFF, 0x238u / 8);
+  EXPECT_EQ(read_word(code, 0) & 0xFFC003FFu, 0xF9400000u);
+  EXPECT_TRUE(apply_relocation(RelocationType::Arm64Ldr64Lo12, code.data(), 0, pc, 0x1FF8, 0,
+                               nullptr));
+  EXPECT_EQ((read_word(code, 0) >> 10) & 0xFFF, 0xFF8u / 8);
+  // A literal that is not 8-byte aligned cannot be addressed.
+  std::string err;
+  EXPECT_FALSE(apply_relocation(RelocationType::Arm64Ldr64Lo12, code.data(), 0, pc, 0x1004, 0,
+                                &err));
 }
 
 TEST(RelocationModel, Adr21) {

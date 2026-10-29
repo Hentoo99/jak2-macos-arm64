@@ -1830,6 +1830,29 @@ InstructionARM64 adr_gpr64(Register dest, s64 offset) {
   return InstructionARM64(Base(0b00010000, 8), Immlo(0), Immhi(0), Rd(dest.id()));
 }
 
+InstructionARM64 adrp_gpr64(Register dest) {
+  ASSERT(dest.is_gpr(instr_set));
+  // https://www.scs.stanford.edu/~zyedidia/arm64/adrp.html
+  // ADRP <Xd>, <label>
+  return InstructionARM64(Base(0b10010000, 8), Immlo(0), Immhi(0), Rd(dest.id()));
+}
+
+InstructionARM64 load64_gpr64_lo12(Register dest, Register base) {
+  ASSERT(dest.is_gpr(instr_set));
+  ASSERT(base.is_gpr(instr_set));
+  // https://www.scs.stanford.edu/~zyedidia/arm64/ldr_imm_gen.html
+  // LDR <Xt>, [<Xn|SP>{, #<pimm>}]
+  return InstructionARM64(Base(0b1111100101, 10), Imm12(0), Rt(dest.id()), Rn(base.id()));
+}
+
+InstructionARM64 add_gpr64_lo12(Register dest, Register base) {
+  ASSERT(dest.is_gpr(instr_set));
+  ASSERT(base.is_gpr(instr_set));
+  // https://www.scs.stanford.edu/~zyedidia/arm64/add_addsub_imm.html
+  // ADD <Xd|SP>, <Xn|SP>, #<imm>
+  return InstructionARM64(Base(0b100100010, 9), Sh(0), Imm12(0), Rd(dest.id()), Rn(base.id()));
+}
+
 InstructionARM64 load32s_pcRel_s32(Register dest, s64 offset) {
   ASSERT(dest.is_gpr(instr_set));
   ASSERT_MSG(offset != 0,

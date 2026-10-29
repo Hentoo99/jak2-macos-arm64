@@ -175,18 +175,26 @@ void regset_common(emitter::ObjectGenerator* gen,
 namespace {
 /*!
  * ARM64 helper: emit `ldr xDst, [pc, #4]` (imm19 placeholder, resolved by
- * handle_temp_rip_data_links at generation time) followed by a 64-bit literal
- * word in a static record.  The literal is patched at load time through the
- * arch-neutral pointer/symbol link machinery; the returned StaticRecord is the
- * literal's location.
+ * handle_temp_rip_data_links at generation time), or an ADRP + LDR pair in
+ * page-relative mode, followed by a 64-bit literal word in a static record.
+ * The literal is patched at load time through the arch-neutral pointer/symbol
+ * link machinery; the returned StaticRecord is the literal's location.
  */
 emitter::StaticRecord emit_arm64_literal(emitter::ObjectGenerator* gen,
                                          emitter::IR_Record irec,
                                          emitter::Register dst) {
-  auto instr = gen->add_instr(Instruction(IGen::ARM64::load64_pcRel_s32(dst, 4)), irec);
   emitter::StaticRecord lit = gen->add_static_to_seg(irec.seg);
   gen->get_static_data(lit).assign(8, 0);
-  gen->link_instruction_static(instr, lit, 0);
+  if (gen->arm64_page_relative()) {
+    // adrp xDst, lit@PAGE ; ldr xDst, [xDst, lit@PAGEOFF]
+    auto page = gen->add_instr(IGen::ARM64::adrp_gpr64(dst), irec);
+    gen->link_instruction_static(page, lit, 0);
+    auto load = gen->add_instr(IGen::ARM64::load64_gpr64_lo12(dst, dst), irec);
+    gen->link_instruction_static(load, lit, 0);
+  } else {
+    auto instr = gen->add_instr(Instruction(IGen::ARM64::load64_pcRel_s32(dst, 4)), irec);
+    gen->link_instruction_static(instr, lit, 0);
+  }
   return lit;
 }
 
@@ -207,8 +215,16 @@ void emit_arm64_literal_address(emitter::ObjectGenerator* gen,
                                 emitter::IR_Record irec,
                                 const emitter::StaticRecord& literal,
                                 emitter::Register dst) {
-  auto adr = gen->add_instr(IGen::ARM64::adr_gpr64(X17, 4), irec);
-  gen->link_instruction_static(adr, literal, 0);
+  if (gen->arm64_page_relative()) {
+    // adrp x17, lit@PAGE ; add x17, x17, lit@PAGEOFF
+    auto page = gen->add_instr(IGen::ARM64::adrp_gpr64(X17), irec);
+    gen->link_instruction_static(page, literal, 0);
+    auto add = gen->add_instr(IGen::ARM64::add_gpr64_lo12(X17, X17), irec);
+    gen->link_instruction_static(add, literal, 0);
+  } else {
+    auto adr = gen->add_instr(IGen::ARM64::adr_gpr64(X17, 4), irec);
+    gen->link_instruction_static(adr, literal, 0);
+  }
   gen->add_instr(IGen::add_gpr64_gpr64(*gen, dst, X17), irec);
 }
 }  // namespace

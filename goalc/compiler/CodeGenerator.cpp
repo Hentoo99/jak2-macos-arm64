@@ -120,8 +120,11 @@ void record_local_variables(const FunctionEnv* func, FunctionDebugInfo* debug) {
 CodeGenerator::CodeGenerator(FileEnv* env,
                              DebugInfo* debug_info,
                              GameVersion version,
-                             InstructionSet instruction_set)
-    : m_gen(version, instruction_set), m_fe(env), m_debug_info(debug_info) {}
+                             InstructionSet instruction_set,
+                             bool arm64_page_relative)
+    : m_gen(version, instruction_set), m_fe(env), m_debug_info(debug_info) {
+  m_gen.set_arm64_page_relative(arm64_page_relative);
+}
 
 /*!
  * Generate an object file.

@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
   std::string username = "#f";
   std::string game = "jak2";
   std::string target_arch = "x86_64";
+  std::string arm64_code_model = "literal";
   int nrepl_port = -1;
   int debug_port = -1;
   fs::path project_path_override;
@@ -58,6 +59,9 @@ int main(int argc, char** argv) {
   app.add_option("-g,--game", game, "The game name: 'jak2' only");
   app.add_option("--target-arch", target_arch,
                  "The target architecture for compiled GOAL code: 'x86_64' (default) or 'arm64'");
+  app.add_option("--arm64-code-model", arm64_code_model,
+                 "How ARM64 code reaches static data: 'literal' (default, LDR literal / ADR, "
+                 "+-1 MiB) or 'page' (ADRP pairs, +-4 GiB, required for signed AOT images)");
   app.add_option("--proj-path", project_path_override,
                  "Specify the location of the 'data/' folder");
   app.add_option("--iso-path", iso_path_override, "Specify the location of the 'iso_data/' folder");
@@ -79,6 +83,13 @@ int main(int argc, char** argv) {
     lg::error("Error: {}", e.what());
     return 1;
   }
+
+  if (arm64_code_model != "literal" && arm64_code_model != "page") {
+    lg::error("Error: unknown --arm64-code-model '{}', expected 'literal' or 'page'",
+              arm64_code_model);
+    return 1;
+  }
+  const bool arm64_page_relative = arm64_code_model == "page";
 
   if (!project_path_override.empty()) {
     if (!fs::exists(project_path_override)) {
@@ -127,6 +138,7 @@ int main(int argc, char** argv) {
   try {
     if (!cmd.empty()) {
       compiler = std::make_unique<Compiler>(game_version, instr_set);
+      compiler->set_arm64_page_relative(arm64_page_relative);
       compiler->run_front_end_on_string(cmd);
       return 0;
     }
@@ -161,6 +173,7 @@ int main(int argc, char** argv) {
     compiler = std::make_unique<Compiler>(
         game_version, instr_set, std::make_optional(repl_config), username,
         std::make_unique<REPL::Wrapper>(username, repl_config, startup_file, nrepl_server_ok));
+    compiler->set_arm64_page_relative(arm64_page_relative);
 
     if (debug_server_ok) {
       debug_server.set_compiler(compiler.get(), &compiler_mutex);
@@ -199,6 +212,7 @@ int main(int argc, char** argv) {
         compiler = std::make_unique<Compiler>(
             game_version, instr_set, std::make_optional(repl_config), username,
             std::make_unique<REPL::Wrapper>(username, repl_config, startup_file, nrepl_server_ok));
+        compiler->set_arm64_page_relative(arm64_page_relative);
         if (debug_server_ok) {
           debug_server.set_compiler(compiler.get(), &compiler_mutex);
         }

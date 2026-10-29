@@ -548,9 +548,11 @@ void ObjectGenerator::handle_temp_rip_func_links(int seg) {
 
 void ObjectGenerator::handle_temp_rip_data_links(int seg) {
   if (m_instruction_set == InstructionSet::ARM64) {
-    // ARM64 references to same-object data use an LDR literal whose imm19 is
-    // resolved at generation time (the literal target is a static record in
-    // this segment).  The literal's .quad is patched at load time through the
+    // ARM64 references to same-object data use an LDR literal / ADR, or an
+    // ADRP + LDR/ADD pair in page-relative mode, all resolved at generation
+    // time (the literal target is a static record in this segment).  ADRP
+    // pages are relative to the segment start, which the runtime allocates
+    // page aligned.  The literal's .quad is patched at load time through the
     // arch-neutral pointer/symbol link machinery, so no persistent RIP link is
     // emitted here.
     for (const auto& link : m_rip_data_temp_links_by_seg.at(seg)) {
@@ -560,9 +562,18 @@ void ObjectGenerator::handle_temp_rip_data_links(int seg) {
       int target_offset = target.location + link.offset;
       u32 word;
       memcpy(&word, m_data_by_seg.at(seg).data() + instr_offset, sizeof(word));
-      RelocationType reloc = ((word & 0x9F000000u) == 0x10000000u)
-                                 ? RelocationType::Arm64Adr21
-                                 : RelocationType::Arm64LdrLiteral19;
+      RelocationType reloc;
+      if ((word & 0x9F000000u) == 0x90000000u) {
+        reloc = RelocationType::Arm64AdrpPage21;
+      } else if ((word & 0x9F000000u) == 0x10000000u) {
+        reloc = RelocationType::Arm64Adr21;
+      } else if ((word & 0xFFC00000u) == 0xF9400000u) {
+        reloc = RelocationType::Arm64Ldr64Lo12;
+      } else if ((word & 0xFFC00000u) == 0x91000000u) {
+        reloc = RelocationType::Arm64AddLo12;
+      } else {
+        reloc = RelocationType::Arm64LdrLiteral19;
+      }
       std::string err;
       if (!apply_relocation(reloc, m_data_by_seg.at(seg).data(), instr_offset, instr_offset,
                             target_offset, 0, &err)) {

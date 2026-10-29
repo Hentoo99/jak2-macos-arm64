@@ -328,6 +328,15 @@ InstructionARM64 load64_pcRel_s32(Register dest, s64 offset);
 //! ADR <Xd>, <label>, with the displacement patched after object layout.
 InstructionARM64 adr_gpr64(Register dest, s64 offset);
 
+//! ADRP <Xd>, <label>, with the page delta patched after object layout.
+InstructionARM64 adrp_gpr64(Register dest);
+
+//! LDR <Xt>, [<Xn>, #<lo12>], the low half of an ADRP pair (offset patched after layout).
+InstructionARM64 load64_gpr64_lo12(Register dest, Register base);
+
+//! ADD <Xd>, <Xn>, #<lo12>, the low half of an ADRP pair (offset patched after layout).
+InstructionARM64 add_gpr64_lo12(Register dest, Register base);
+
 InstructionARM64 load32s_pcRel_s32(Register dest, s64 offset);
 
 InstructionARM64 load32u_pcRel_s32(Register dest, s64 offset);

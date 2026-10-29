@@ -21,7 +21,8 @@ class CodeGenerator {
   CodeGenerator(FileEnv* env,
                 DebugInfo* debug_info,
                 GameVersion version,
-                emitter::InstructionSet instruction_set);
+                emitter::InstructionSet instruction_set,
+                bool arm64_page_relative = false);
   std::vector<u8> run(const TypeSystem* ts);
   emitter::ObjectGeneratorStats get_obj_stats() const { return m_gen.get_stats(); }
 

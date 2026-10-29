@@ -125,3 +125,47 @@ TEST(ObjectGeneratorARM64, X86RipFuncLinkRejected) {
   gen.link_instruction_to_function(rec, target);
   EXPECT_THROW(gen.generate_data_v3(&ts), std::runtime_error);
 }
+
+TEST(ObjectGeneratorARM64, PageRelativeStaticReference) {
+  // In page-relative mode a literal is reached with ADRP + LDR and an address
+  // with ADRP + ADD; both pairs must resolve to the static record, which sits
+  // on a later page than the code.
+  ObjectGenerator gen(GameVersion::Jak2, InstructionSet::ARM64);
+  gen.set_arm64_page_relative(true);
+  TypeSystem ts;
+  ts.add_builtin_types(GameVersion::Jak2);
+  FunctionDebugInfo dbg;
+  dbg.name = "page-func";
+  FunctionRecord func = gen.add_function_to_seg(0, &dbg);
+  IR_Record ir0 = gen.add_ir(func);
+  StaticRecord lit = gen.add_static_to_seg(0);
+  gen.get_static_data(lit).assign(8, 0);
+  auto load_page = gen.add_instr(Instruction(adrp_gpr64(X16)), ir0);
+  gen.link_instruction_static(load_page, lit, 0);
+  auto load_lo = gen.add_instr(Instruction(load64_gpr64_lo12(X16, X16)), ir0);
+  gen.link_instruction_static(load_lo, lit, 0);
+  auto addr_page = gen.add_instr(Instruction(adrp_gpr64(X17)), ir0);
+  gen.link_instruction_static(addr_page, lit, 0);
+  auto addr_lo = gen.add_instr(Instruction(add_gpr64_lo12(X17, X17)), ir0);
+  gen.link_instruction_static(addr_lo, lit, 0);
+  auto obj = gen.generate_data_v3(&ts);
+  const auto& data = obj.segment_data.at(0);
+  // The literal is the only static record, so it ends the segment.
+  const s64 lit_location = (s64)data.size() - 8;
+  ASSERT_GE(lit_location, 0x1000);
+
+  auto adrp_page = [&](size_t pc) {
+    u32 w = read_word(data, pc);
+    EXPECT_EQ(w & 0x9F00001Fu, 0x90000000u | (w & 31));
+    s64 imm = (s64)((((w >> 5) & 0x7FFFF) << 2) | ((w >> 29) & 3));
+    imm = (imm ^ (1 << 20)) - (1 << 20);
+    return ((s64)pc & ~0xFFFll) + imm * 0x1000;
+  };
+  // [0-3] type tag; [4] adrp x16; [8] ldr x16; [12] adrp x17; [16] add x17.
+  u32 ldr = read_word(data, 8);
+  EXPECT_EQ(ldr & 0xFFC003FFu, 0xF9400000u | (16 << 5) | 16);
+  EXPECT_EQ(adrp_page(4) + 8 * ((ldr >> 10) & 0xFFF), lit_location);
+  u32 add = read_word(data, 16);
+  EXPECT_EQ(add & 0xFFC003FFu, 0x91000000u | (17 << 5) | 17);
+  EXPECT_EQ(adrp_page(12) + ((add >> 10) & 0xFFF), lit_location);
+}

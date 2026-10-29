@@ -22,7 +22,7 @@ const RelocationFieldInfo& relocation_info(RelocationType type) {
        (1LL << 18) - 1, 0, 4, false},
       // ADRP: immlo at [30:29], immhi at [23:5]
       {RelocationType::Arm64AdrpPage21, "arm64-adrp-page21", 5, 19, true, 1, true, -1LL << 20,
-       (1LL << 20) - 1, 1, 0x1000, false},
+       (1LL << 20) - 1, 1, 1, false},
       // ADD lo12: imm12 at [21:10]
       {RelocationType::Arm64AddLo12, "arm64-add-lo12", 10, 12, false, 1, false, 0, 0xFFF, 0, 1,
        false},
@@ -35,6 +35,9 @@ const RelocationFieldInfo& relocation_info(RelocationType type) {
       // ADR: immlo at [30:29], immhi at [23:5]
       {RelocationType::Arm64Adr21, "arm64-adr21", 5, 19, true, 1, true, -(1LL << 20),
        (1LL << 20) - 1, 0, 1, false},
+      // LDR (64-bit, unsigned offset) lo12: imm12 at [21:10], scaled by 8
+      {RelocationType::Arm64Ldr64Lo12, "arm64-ldr64-lo12", 10, 12, false, 8, false, 0, 0xFFF, 0, 8,
+       false},
   };
   int idx = static_cast<int>(type) - 1;
   if (idx < 0 || idx >= (int)(sizeof(kInfos) / sizeof(kInfos[0]))) {
@@ -86,9 +89,10 @@ std::optional<u32> compute_relocation_field(RelocationType type,
   } else if (type == RelocationType::X86Imm32) {
     value = resolved;
   } else if (info.pc_base == 1) {
-    // ADRP: pages between the target page and the PC page.
-    value = (resolved - base) / 0x1000;
-  } else if (type == RelocationType::Arm64AddLo12) {
+    // ADRP: pages between the target page and the PC page.  Mask the target
+    // to its page first so unaligned and backward targets round correctly.
+    value = ((resolved & ~0xFFFll) - base) / 0x1000;
+  } else if (type == RelocationType::Arm64AddLo12 || type == RelocationType::Arm64Ldr64Lo12) {
     // The low 12 bits of the page-relative address (the page was resolved by
     // the paired ADRP, so only the low 12 bits matter).
     value = resolved & 0xFFF;
@@ -192,7 +196,7 @@ bool apply_relocation(RelocationType type,
 }
 
 std::optional<std::vector<u8>> serialize_relocation(const Relocation& r) {
-  if (static_cast<int>(r.type) < 1 || static_cast<int>(r.type) > 9) {
+  if (static_cast<int>(r.type) < 1 || static_cast<int>(r.type) > 10) {
     return std::nullopt;
   }
   std::vector<u8> data;
@@ -214,7 +218,7 @@ std::optional<Relocation> deserialize_relocation(const std::vector<u8>& data) {
     return std::nullopt;
   }
   u8 tag = data[0];
-  if (tag < 1 || tag > 9) {
+  if (tag < 1 || tag > 10) {
     return std::nullopt;
   }
   u32 pos = 0;

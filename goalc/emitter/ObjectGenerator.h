@@ -104,6 +104,10 @@ class ObjectGenerator {
   GameVersion version() const { return m_version; }
 
   InstructionSet instr_set() const { return m_instruction_set; }
+  //! ARM64 only: reach static data with ADRP pairs (+-4 GiB) instead of
+  //! LDR-literal/ADR (+-1 MiB), so code and data can live in separate images.
+  void set_arm64_page_relative(bool enable) { m_arm64_page_relative = enable; }
+  bool arm64_page_relative() const { return m_arm64_page_relative; }
 
  private:
   void handle_temp_static_type_links(int seg);
@@ -222,6 +226,7 @@ class ObjectGenerator {
   using seg_map = std::array<std::map<std::string, std::vector<T>>, N_SEG>;
   GameVersion m_version;
   InstructionSet m_instruction_set;
+  bool m_arm64_page_relative = false;
 
   // final data
   seg_vector<u8> m_data_by_seg;

@@ -23,7 +23,7 @@
  *                     26-bit signed, range [-2^25, 2^25-1] words, target 4-aligned
  *   Arm64CondBranch19 imm19 = (target - pc - addend) / 4
  *                     19-bit signed, range [-2^18, 2^18-1] words, target 4-aligned
- *   Arm64AdrpPage21   imm21 = ((target + addend) - (pc & ~0xFFF)) / 0x1000
+ *   Arm64AdrpPage21   imm21 = (((target + addend) & ~0xFFF) - (pc & ~0xFFF)) / 0x1000
  *                     21-bit signed pages; field split immlo[30:29] + immhi[23:5]
  *   Arm64AddLo12      imm12 = (target + addend) & 0xFFF
  *                     12-bit unsigned; pairs with ADRP (same page-relative value)
@@ -34,6 +34,9 @@
  *                     instruction itself (bits [22:21])
  *   Arm64Adr21        imm21 = target - pc - addend
  *                     21-bit signed byte displacement, split immlo/immhi
+ *   Arm64Ldr64Lo12    imm12 = ((target + addend) & 0xFFF) / 8
+ *                     12-bit unsigned, scaled by 8; pairs with ADRP for a
+ *                     64-bit LDR (unsigned offset), target 8-aligned
  */
 
 #include <cstdint>
@@ -55,6 +58,7 @@ enum class RelocationType : u8 {
   Arm64LdrLiteral19 = 7,
   Arm64MovWide16 = 8,
   Arm64Adr21 = 9,
+  Arm64Ldr64Lo12 = 10,
 };
 
 /*!

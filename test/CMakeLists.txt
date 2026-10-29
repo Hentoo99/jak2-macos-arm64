@@ -31,6 +31,7 @@ add_executable(goalc-test
         ${CMAKE_CURRENT_LIST_DIR}/test_aot_manifest.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_aot_assembly.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_aot_signed_module.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/test_touch_controls.cpp
         ${GOALC_TEST_AOT_FIXTURE}
         ${CMAKE_CURRENT_LIST_DIR}/test_pretty_print.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_math.cpp

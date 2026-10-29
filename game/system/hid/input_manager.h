@@ -14,6 +14,7 @@
 #include "devices/game_controller.h"
 #include "devices/keyboard.h"
 #include "devices/mouse.h"
+#include "devices/touch_controls.h"
 #include "game/settings/settings.h"
 #include "game/system/hid/input_bindings.h"
 
@@ -64,6 +65,10 @@ class InputManager {
   void register_command(const CommandBinding::Source source, const CommandBinding bind);
 
   std::optional<std::shared_ptr<PadData>> get_current_data(const int port) const;
+  /// The on-screen controls, when enabled and the player is not using a game controller.
+  TouchControls* visible_touch_controls() const {
+    return m_touch && !m_controller_in_use ? m_touch.get() : nullptr;
+  }
   std::pair<int, int> get_mouse_pos() const { return m_mouse.get_mouse_pos(); }
   MouseDevice::MouseButtonStatus get_mouse_button_status() const {
     return m_mouse.get_mouse_button_status();
@@ -165,6 +170,11 @@ class InputManager {
   /// You can have many mice plugged into a computer, but we do not differentiate between
   /// them it's all aggregated under one device.
   MouseDevice m_mouse;
+  /// On-screen controls for touch screens (port 0), see touch_controls.h.
+  std::unique_ptr<TouchControls> m_touch;
+  /// A game controller was used more recently than the touch screen.  Connected controllers do
+  /// not count by themselves: the iOS Simulator and some keyboards report one.
+  bool m_controller_in_use = false;
   /// A mapping between port numbers and the controller index. Connect as many controllers as
   /// you want.
   std::unordered_map<int, int> m_controller_port_mapping;

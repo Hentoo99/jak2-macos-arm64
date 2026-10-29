@@ -6,11 +6,13 @@
 #define STBI_WINDOWS_UTF8
 
 #include <string>
+#include <vector>
 
 #include "runtime.h"
 
 #include "common/global_profiler/GlobalProfiler.h"
 #include "common/log/log.h"
+#include "common/platform/BuildConfig.h"
 #include "common/util/FileUtil.h"
 #include "common/util/dialogs.h"
 #include "common/util/os.h"
@@ -22,11 +24,10 @@
 #include "graphics/gfx_test.h"
 
 #include "third-party/CLI11.hpp"
-
-#include "common/platform/BuildConfig.h"
 #if OG_TARGET_IOS
 // On iOS, SDL starts the UIKit application and then calls this file's main() (renamed SDL_main).
 #include "third-party/SDL/include/SDL3/SDL_main.h"
+#include "third-party/SDL/include/SDL3/SDL_messagebox.h"
 #endif
 
 #ifdef _WIN32
@@ -94,6 +95,30 @@ std::string game_arg_documentation() {
  */
 int main(int argc, char** argv) {
   ArgumentGuard u8_guard(argc, argv);
+
+#if OG_TARGET_IOS
+  // Launched from the home screen there are no arguments: boot the game from the data pack copied
+  // into the app's Documents folder (scripts/make_jak2_ios_data_pack.sh).
+  const std::string ios_data_dir =
+      std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/Documents/jak2";
+  std::vector<std::string> ios_args;
+  std::vector<char*> ios_argv;
+  if (argc <= 1) {
+    ios_args = {argv[0], "-g", "jak2", "--proj-path", ios_data_dir, "--", "-boot", "-fakeiso"};
+    for (auto& arg : ios_args) {
+      ios_argv.push_back(arg.data());
+    }
+    argc = (int)ios_argv.size();
+    argv = ios_argv.data();
+    if (!fs::exists(fs::path(ios_data_dir) / "out")) {
+      const std::string message =
+          "Game data not found.\n\nCopy the 'jak2' data folder into this "
+          "app's Documents (Finder or the Files app), then reopen it.";
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Jak II", message.c_str(), nullptr);
+      return 1;
+    }
+  }
+#endif
 
   // CLI flags
   bool show_version = false;

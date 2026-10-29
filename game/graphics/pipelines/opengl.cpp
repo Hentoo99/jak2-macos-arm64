@@ -203,6 +203,10 @@ static int gl_init(GfxGlobalSettings& settings) {
     auto p = scoped_prof("startup::sdl::init_sdl");
     // remove SDL garbage from hooking signal handler.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+#if OG_TARGET_IOS
+    // The game is landscape only; otherwise SDL picks the orientation from the window size.
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO)) {
       sdl_util::log_error("Could not initialize SDL, exiting");
       dialogs::create_error_message_dialog("Critical Error Encountered",
@@ -786,6 +790,20 @@ void GLDisplay::render() {
   // framebuffer size
   int fbuf_w, fbuf_h;
   SDL_GetWindowSizeInPixels(m_window, &fbuf_w, &fbuf_h);
+#if OG_GRAPHICS_BACKEND_GLES
+  {
+    // The EGL surface follows the Metal layer, which can lag behind the window (rotation).
+    EGLint surface_w = 0, surface_h = 0;
+    eglQuerySurface(g_egl_display, g_egl_surface, EGL_WIDTH, &surface_w);
+    eglQuerySurface(g_egl_display, g_egl_surface, EGL_HEIGHT, &surface_h);
+    static EGLint logged_w = -1, logged_h = -1;
+    if (surface_w != logged_w || surface_h != logged_h) {
+      lg::info("GLES: surface {}x{}, window {}x{} pixels", surface_w, surface_h, fbuf_w, fbuf_h);
+      logged_w = surface_w;
+      logged_h = surface_h;
+    }
+  }
+#endif
 
   // render game!
   g_gfx_data->debug_gui.master_enable = is_imgui_visible();
@@ -828,6 +846,9 @@ void GLDisplay::render() {
   if (is_imgui_visible()) {
     auto p = scoped_prof("debug-gui");
     g_gfx_data->debug_gui.draw(g_gfx_data->dma_copier.get_last_result().stats);
+  }
+  if (auto* touch = m_input_manager->visible_touch_controls()) {
+    touch->draw(ImGui::GetForegroundDrawList());
   }
   {
     auto p = scoped_prof("imgui-render");

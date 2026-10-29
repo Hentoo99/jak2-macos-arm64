@@ -335,3 +335,30 @@ Prossimi passi:
 - audio (oggi stub muto);
 - dispositivo fisico (iPad Air 5, iPhone);
 - i difetti grafici GLES ancora aperti.
+
+### Tasti virtuali, pack dati e dispositivo (2026-10-29)
+
+- **Tasti virtuali** (`game/system/hid/devices/touch_controls.*`). Layout PS2 completo:
+  - stick sinistro e destro "mobili", che nascono dove si appoggia il dito; il destro muove la
+    camera;
+  - ✕ ○ △ □ disegnati come forme, L1/L2/R1/R2, Select/Start;
+  - rispetto dell'area sicura (notch) e disegno con la foreground draw list di ImGui;
+  - si nascondono quando si **usa** un controller e ricompaiono al primo tocco. Un controller
+    soltanto connesso non conta: il simulatore ne espone uno virtuale;
+  - attivi su iOS, oppure con `OPENGOAL_TOUCH_CONTROLS=1`, dove il mouse fa da dito;
+  - test: `TouchControls.*`.
+- **Orientamento.** `SDL_HINT_ORIENTATIONS=LandscapeLeft LandscapeRight`: senza, sull'iPhone la
+  finestra restava verticale e il gioco occupava solo il 46% dello schermo.
+- **Avvio senza argomenti su iOS.** I dati vengono da `Documents/jak2`; se mancano, compare un
+  avviso. `REPL::find_repl_username` tollera l'assenza di `goal_src/`.
+- **Pack dati.** `scripts/make_jak2_ios_data_pack.sh` produce `out/ios-data/jak2`, circa 2,7 GB
+  di cloni APFS, quindi senza spazio aggiuntivo su disco. `VAGWAD.ENG` è obbligatorio: l'IOP lo
+  apre al boot anche con l'audio spento. Altre voci si aggiungono con `VOICE_LANGS="ITA"`.
+- **Verifica nel simulatore iPhone 18 Pro.** Pack copiato in `Documents` e avvio dall'icona: il
+  gioco arriva al titolo con i tasti virtuali.
+- **Dispositivo.** `build-ios-device` (iphoneos, `-mcrc`, bundle `com.ermadev.jak2`);
+  `verify_apple_no_jit.py` dà PASS.
+- **Installazione.** `scripts/install_jak2_ios_device.sh` firma con il Personal Team gratuito
+  (profilo di 7 giorni generato da Xcode tramite un'app stub), installa con `devicectl`, copia il
+  pack in `Documents/jak2` e avvia l'app. Il profilo per iPhone e iPad è già stato generato e
+  scade il 2026-11-05.

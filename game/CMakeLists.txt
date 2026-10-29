@@ -186,6 +186,7 @@ set(RUNTIME_SOURCE
         system/hid/devices/game_controller.cpp
         system/hid/devices/keyboard.cpp
         system/hid/devices/mouse.cpp
+        system/hid/devices/touch_controls.cpp
         system/hid/display_manager.cpp
         system/hid/input_bindings.cpp
         system/hid/input_manager.cpp

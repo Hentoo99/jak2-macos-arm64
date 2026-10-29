@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <unordered_set>
 
 #include "input_manager.h"
@@ -68,6 +69,11 @@ InputManager::InputManager(SDL_Window* window)
     m_data[1] = std::make_shared<PadData>();
     m_keyboard = KeyboardDevice(m_settings);
     m_mouse = MouseDevice(m_window, m_settings);
+    if (TouchControls::enabled_for_platform()) {
+      // On a desktop, let the mouse stand in for a finger.
+      SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "1");
+      m_touch = std::make_unique<TouchControls>(m_window);
+    }
 
     if (m_data.find(m_keyboard_and_mouse_port) == m_data.end()) {
       m_data[m_keyboard_and_mouse_port] = std::make_shared<PadData>();
@@ -269,6 +275,18 @@ void InputManager::process_sdl_event(const SDL_Event& event) {
                              m_waiting_for_bind);
     m_mouse.process_event(event, m_command_binds, m_data.at(m_keyboard_and_mouse_port),
                           m_waiting_for_bind);
+  }
+
+  if (m_touch && m_data.find(0) != m_data.end()) {
+    if (event.type == SDL_EVENT_FINGER_DOWN) {
+      m_controller_in_use = false;
+    } else if (!m_controller_in_use && (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                                        (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+                                         std::abs(event.gaxis.value) > 16000))) {
+      m_controller_in_use = true;
+      m_touch->release_all(*m_data.at(0));
+    }
+    m_touch->process_event(event, *m_data.at(0));
   }
 
   // Send event to active controller device

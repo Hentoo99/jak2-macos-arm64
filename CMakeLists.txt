@@ -262,6 +262,9 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
         else()
             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mcrc")
         endif()
+    else()
+        # Every iOS 17 device (A12 or later) has the ARMv8 CRC32 instructions crc32.h uses.
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcrc")
     endif()
 
     # additional c++ flags for release mode for our projects

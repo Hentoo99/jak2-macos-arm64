@@ -232,6 +232,10 @@ std::string find_repl_username() {
   // 2. if this is absent AND there is a single folder inside the "user" folder, use that as the
   // username
   auto user_dir = file_util::get_jak_project_dir() / "goal_src" / "user";
+  // Release data folders (for example the iOS data pack) have no goal_src at all.
+  if (!fs::exists(user_dir)) {
+    return "unknown";
+  }
   auto dirs = file_util::find_directories_in_dir(user_dir);
   if (dirs.size() == 1) {
     return dirs.at(0).filename().string();

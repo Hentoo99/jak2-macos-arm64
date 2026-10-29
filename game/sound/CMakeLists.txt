@@ -1,6 +1,3 @@
-if(OG_TARGET_IOS)
-  set(SOUND_SOURCES ios_stub.cpp)
-else()
 set(SOUND_SOURCES
   989snd/player.cpp
   989snd/midi_handler.cpp
@@ -20,11 +17,11 @@ set(SOUND_SOURCES
   sndshim.cpp
   sdshim.cpp
   )
-endif()
 
 add_library(sound STATIC ${SOUND_SOURCES})
 if(OG_TARGET_IOS)
-  target_link_libraries(sound PRIVATE common)
+  # cubeb does not build for iOS; 989snd plays through SDL there (see 989snd/player.cpp).
+  target_link_libraries(sound PRIVATE fmt SDL3::SDL3 common)
 else()
   target_link_libraries(sound PRIVATE fmt cubeb common)
 endif()

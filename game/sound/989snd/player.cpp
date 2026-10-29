@@ -8,6 +8,12 @@
 
 #include "fmt/format.h"
 
+#if OG_TARGET_IOS
+#include <vector>
+
+#include <SDL3/SDL_init.h>
+#endif
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <combaseapi.h>
@@ -27,6 +33,45 @@ Player::~Player() {
   DestroyCubeb();
 }
 
+#if OG_TARGET_IOS
+void Player::InitCubeb() {
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    lg::error("SDL audio init failed: {}", SDL_GetError());
+    return;
+  }
+  const SDL_AudioSpec spec = {SDL_AUDIO_S16LE, 2, 48000};
+  mStream =
+      SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, &sound_callback, this);
+  if (!mStream) {
+    lg::error("SDL audio stream failed: {}", SDL_GetError());
+    return;
+  }
+  SDL_ResumeAudioStreamDevice(mStream);
+}
+
+void Player::DestroyCubeb() {
+  if (mStream) {
+    SDL_DestroyAudioStream(mStream);
+    mStream = nullptr;
+  }
+  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
+void Player::sound_callback(void* user,
+                            SDL_AudioStream* stream,
+                            int additional,
+                            [[maybe_unused]] int total) {
+  // SDL asks for bytes: render whole stereo s16 frames, like the cubeb callback.
+  thread_local std::vector<s16Output> buffer;
+  const int frames = additional / (int)sizeof(s16Output);
+  if (frames <= 0) {
+    return;
+  }
+  buffer.resize(frames);
+  ((Player*)user)->Tick(buffer.data(), frames);
+  SDL_PutAudioStreamData(stream, buffer.data(), frames * (int)sizeof(s16Output));
+}
+#else
 void Player::InitCubeb() {
 #ifdef _WIN32
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -93,6 +138,7 @@ long Player::sound_callback([[maybe_unused]] cubeb_stream* stream,
 void Player::state_callback([[maybe_unused]] cubeb_stream* stream,
                             [[maybe_unused]] void* user,
                             [[maybe_unused]] cubeb_state state) {}
+#endif
 
 void Player::Tick(s16Output* stream, int samples) {
   std::scoped_lock lock(mTickLock);

@@ -390,3 +390,17 @@ fisso con il GL desktop (`OPENGOAL_SCREENSHOT_FRAMES`) e renderer spenti a metà
 - **Shader su iPhone.** Gli shader ES stanno in `Documents/jak2/out/gles-shaders`.
   `install_jak2_ios_device.sh` ora li copia a ogni installazione, anche con `SKIP_DATA=1`.
   `LAUNCH=0` installa senza aprire l'app.
+
+### Audio su iOS e velocità delle cutscene
+
+- **Sintomo.** Sull'iPhone l'intro correva velocissima. Riprodotto nel simulatore: al fotogramma
+  1000 compariva già "Press the Start Button", mentre su Mac si è ancora a "Sony presents".
+- **Causa.** Su iOS il motore audio era uno stub (`game/sound/ios_stub.cpp`). Il suo
+  `sceSdGetAddr(SD_VA_NAX)` restituiva sempre 0. L'overlord (`spustreams.cpp`) usa quella
+  posizione per seguire gli stream audio, e le cutscene si sincronizzano sugli stream.
+- **Correzione.** Su iOS ora gira il vero 989snd.
+  - Il backend AudioUnit di cubeb non compila per iOS (159 errori: usa API HAL solo macOS),
+    quindi su iOS `snd::Player` produce i campioni tramite uno stream audio SDL3 (driver
+    CoreAudio).
+  - `SDL_AUDIO` è attivo solo su iOS; desktop resta su cubeb.
+  - Verifica nel simulatore: i fotogrammi 1000, 1600 e 2200 coincidono con il Mac, e c'è audio.

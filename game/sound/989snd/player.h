@@ -14,11 +14,16 @@
 #include "sound_handler.h"
 
 #include "common/common_types.h"
+#include "common/platform/BuildConfig.h"
 
 #include "../common/synth.h"
 #include "game/sound/989snd/vagvoice.h"
 
+#if OG_TARGET_IOS
+#include <SDL3/SDL_audio.h>
+#else
 #include "third-party/cubeb/cubeb/include/cubeb/cubeb.h"
+#endif
 
 namespace snd {
 
@@ -86,6 +91,11 @@ class Player {
   VoiceManager mVmanager;
   s32 mTick{0};
 
+#if OG_TARGET_IOS
+  // cubeb's AudioUnit backend does not build for iOS: output through SDL's CoreAudio driver.
+  SDL_AudioStream* mStream{nullptr};
+  static void sound_callback(void* user, SDL_AudioStream* stream, int additional, int total);
+#else
   cubeb* mCtx{nullptr};
   cubeb_stream* mStream{nullptr};
 
@@ -95,5 +105,6 @@ class Player {
                              void* output_buffer,
                              long len);
   static void state_callback(cubeb_stream* stream, void* user, cubeb_state state);
+#endif
 };
 }  // namespace snd

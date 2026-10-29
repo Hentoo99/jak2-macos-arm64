@@ -13,7 +13,12 @@ set(SDL_LIBC ON CACHE BOOL "" FORCE)
 
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 set(SDL_ATOMIC ON CACHE BOOL "" FORCE)
-set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
+if(OG_TARGET_IOS)
+    # cubeb does not build for iOS, so the game's sound plays through SDL's CoreAudio driver there.
+    set(SDL_AUDIO ON CACHE BOOL "" FORCE)
+else()
+    set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
+endif()
 set(SDL_VIDEO ON CACHE BOOL "" FORCE)
 set(SDL_RENDER OFF CACHE BOOL "" FORCE)
 if(OG_TARGET_IOS)

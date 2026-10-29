@@ -1,6 +1,6 @@
 # Port iOS di Jak 2 — decisioni (fase 0) e prototipo del code model (fase 1)
 
-Stato: **proposta** (AI-assisted), branch `ios`. Contesto e confronto con i port iOS di Jak 1
+Stato: **proposta** (AI-assisted), branch `ios`. Fase 1 (code model `page`) completata il 2026-10-29. Contesto e confronto con i port iOS di Jak 1
 (ottsel, Citadel): `~/jak-ios/ANALISI.md`, fuori dal repo. Queste decisioni modificano il
 piano di `docs/apple-aot-metal-playbook.md` dove indicato; il resto del playbook resta valido.
 
@@ -30,12 +30,11 @@ AOT-006 e AOT-007). Va quindi rivisto il percorso AOT di `make_function_from_c*`
 
 ## ADR-IOS-002 — Code model ARM64 "page" (ADRP) in goalc
 
-**Decisione.** goalc ha un secondo code model ARM64, selezionato con
-`--arm64-code-model page`:
+**Decisione.** goalc ha un code model ARM64 `page`, **default dal 2026-10-29**. Il vecchio
+modello resta disponibile con `--arm64-code-model literal`:
 - `ldr xN, [pc, #imm19]` diventa `adrp xN, lit@PAGE ; ldr xN, [xN, lit@PAGEOFF]`;
 - `adr x17, lit` diventa `adrp x17, lit@PAGE ; add x17, x17, lit@PAGEOFF`.
 
-Il default resta `literal` finché il gioco completo non è validato in `page`.
 
 **Perché funziona già con il JIT.** goalc risolve le coppie ADRP all'interno del segmento.
 Il runtime alloca ogni segmento eseguibile allineato alla pagina (16 KiB, `kmalloc.cpp`), quindi
@@ -119,11 +118,22 @@ Risultati:
    - `RelocationModel.Ldr64Lo12`;
    - `ObjectGeneratorARM64.PageRelativeStaticReference`.
 
-**Prossimo gate della fase 1 (build lunga, da confermare):**
-1. `(mi)` completo con `--arm64-code-model page`;
-2. `arm64_code_model_audit.py --require-page out/jak2-arm64/obj`;
-3. una partita con finestra (menu, Haven City, una missione).
-4. Se tutto passa, `page` diventa il default ARM64.
+**Gate della fase 1 superato (2026-10-29):**
+6. **Build completa in page.** `(make-group "all-code" :force #t)` + `(mi)`: 841 oggetti e 93
+   CGO/DGO in circa 14 s. `GAME.CGO` cresce di circa 430 KB.
+7. **Audit.** `arm64_code_model_audit.py --require-page out/jak2-arm64/obj` su 841 oggetti:
+   0 `ldr` literal / `adr`, 290 281 `adrp+ldr` e 28 000 `adrp+add`.
+8. **Headless.** 90 s headless senza fault: titolo e 4 livelli.
+9. **Sessione con finestra.** Fatta dall'utente con `task boot-game` (menu, Haven City,
+   missione, salvataggio): funziona.
+10. **Default.** `page` diventa il default (`goalc/main.cpp`, `Compiler::m_arm64_page_relative`).
+    goalc senza opzioni produce 840/840 oggetti identici alla build page. 302 test verdi.
+
+Per tornare al vecchio modello basta ricompilare con `--arm64-code-model literal`
+(`all-code` forzato + `(mi)`).
+
+**Prossimo passo: fase 2.** Emitter da oggetto a `.S` firmato, arena `__ARENA`, loader firmato
+ed export bank per Jak 2. Primo traguardo: Jak 2 AOT su macOS senza `allow-jit`.
 
 Nota operativa: i run headless vanno lanciati con `--config-path <dir temporanea>`. Altrimenti
 `gk` riscrive `pc-settings.gc` dell'utente con la risoluzione di ripiego (320×240).

@@ -123,7 +123,7 @@ class Compiler {
  private:
   GameVersion m_version;
   emitter::InstructionSet m_instr_set;
-  bool m_arm64_page_relative = false;
+  bool m_arm64_page_relative = true;
   TypeSystem m_ts;
   std::unique_ptr<GlobalEnv> m_global_env = nullptr;
   std::unique_ptr<None> m_none = nullptr;

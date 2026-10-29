@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
   std::string username = "#f";
   std::string game = "jak2";
   std::string target_arch = "x86_64";
-  std::string arm64_code_model = "literal";
+  std::string arm64_code_model = "page";
   int nrepl_port = -1;
   int debug_port = -1;
   fs::path project_path_override;
@@ -60,8 +60,8 @@ int main(int argc, char** argv) {
   app.add_option("--target-arch", target_arch,
                  "The target architecture for compiled GOAL code: 'x86_64' (default) or 'arm64'");
   app.add_option("--arm64-code-model", arm64_code_model,
-                 "How ARM64 code reaches static data: 'literal' (default, LDR literal / ADR, "
-                 "+-1 MiB) or 'page' (ADRP pairs, +-4 GiB, required for signed AOT images)");
+                 "How ARM64 code reaches static data: 'page' (default, ADRP pairs, +-4 GiB, "
+                 "required for signed AOT images) or 'literal' (LDR literal / ADR, +-1 MiB)");
   app.add_option("--proj-path", project_path_override,
                  "Specify the location of the 'data/' folder");
   app.add_option("--iso-path", iso_path_override, "Specify the location of the 'iso_data/' folder");

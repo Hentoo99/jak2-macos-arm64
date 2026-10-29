@@ -17,8 +17,13 @@ set(OPENGOAL_EXECUTION_MODE "DYNAMIC" CACHE STRING
     "GOAL execution backend (DYNAMIC or AOT)")
 set_property(CACHE OPENGOAL_EXECUTION_MODE PROPERTY STRINGS DYNAMIC AOT)
 set(OPENGOAL_GRAPHICS_BACKEND "OPENGL" CACHE STRING
-    "Graphics backend (OPENGL or METAL)")
-set_property(CACHE OPENGOAL_GRAPHICS_BACKEND PROPERTY STRINGS OPENGL METAL)
+    "Graphics backend (OPENGL, GLES or METAL)")
+set_property(CACHE OPENGOAL_GRAPHICS_BACKEND PROPERTY STRINGS OPENGL GLES METAL)
+# GLES runs the OpenGL renderer on OpenGL ES 3.0 provided by ANGLE (on Metal), see
+# docs/ios/DECISIONI.md (ADR-IOS-003).  The prebuilt ANGLE (kivy/angle-builder) lives outside the
+# repository.
+set(OPENGOAL_ANGLE_DIR "" CACHE PATH
+    "ANGLE build for the GLES backend: include/ plus libEGL/libGLESv2 dylibs or frameworks")
 
 if(NOT OPENGOAL_EXECUTION_MODE STREQUAL "DYNAMIC" AND
    NOT OPENGOAL_EXECUTION_MODE STREQUAL "AOT")
@@ -27,9 +32,13 @@ if(NOT OPENGOAL_EXECUTION_MODE STREQUAL "DYNAMIC" AND
 endif()
 
 if(NOT OPENGOAL_GRAPHICS_BACKEND STREQUAL "OPENGL" AND
+   NOT OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES" AND
    NOT OPENGOAL_GRAPHICS_BACKEND STREQUAL "METAL")
     message(FATAL_ERROR
-        "OPENGOAL_GRAPHICS_BACKEND must be OPENGL or METAL, got '${OPENGOAL_GRAPHICS_BACKEND}'")
+        "OPENGOAL_GRAPHICS_BACKEND must be OPENGL, GLES or METAL, got '${OPENGOAL_GRAPHICS_BACKEND}'")
+endif()
+if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES" AND NOT IS_DIRECTORY "${OPENGOAL_ANGLE_DIR}/include")
+    message(FATAL_ERROR "The GLES backend needs OPENGOAL_ANGLE_DIR (an ANGLE build with include/)")
 endif()
 
 set(OG_TARGET_IOS 0)
@@ -44,8 +53,8 @@ if(OG_TARGET_IOS AND NOT OPENGOAL_EXECUTION_MODE STREQUAL "AOT")
     message(FATAL_ERROR "iOS targets require OPENGOAL_EXECUTION_MODE=AOT")
 endif()
 
-if(OG_TARGET_IOS AND NOT OPENGOAL_GRAPHICS_BACKEND STREQUAL "METAL")
-    message(FATAL_ERROR "iOS targets require OPENGOAL_GRAPHICS_BACKEND=METAL")
+if(OG_TARGET_IOS AND OPENGOAL_GRAPHICS_BACKEND STREQUAL "OPENGL")
+    message(FATAL_ERROR "iOS targets require OPENGOAL_GRAPHICS_BACKEND=GLES or METAL")
 endif()
 
 option(OG_BUILD_HOST_TOOLS "Build desktop-only compiler and authoring tools" ON)
@@ -88,9 +97,15 @@ endif()
 if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "METAL")
     set(OG_GRAPHICS_BACKEND_METAL 1)
     set(OG_GRAPHICS_BACKEND_OPENGL 0)
+    set(OG_GRAPHICS_BACKEND_GLES 0)
 else()
     set(OG_GRAPHICS_BACKEND_METAL 0)
     set(OG_GRAPHICS_BACKEND_OPENGL 1)
+    if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+        set(OG_GRAPHICS_BACKEND_GLES 1)
+    else()
+        set(OG_GRAPHICS_BACKEND_GLES 0)
+    endif()
 endif()
 
 set(OG_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -409,6 +424,33 @@ endif()
 # build imgui
 include_directories(third-party/glad/include)
 include_directories(third-party/SDL/include)
+
+if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+    # og_angle: EGL + OpenGL ES 3.0 from the prebuilt ANGLE in OPENGOAL_ANGLE_DIR.
+    add_library(og_angle INTERFACE)
+    target_include_directories(og_angle INTERFACE "${OPENGOAL_ANGLE_DIR}/include")
+    if(EXISTS "${OPENGOAL_ANGLE_DIR}/libGLESv2.framework")
+        # iOS: frameworks with @rpath install names, embedded into the app's Frameworks folder.
+        target_link_options(og_angle INTERFACE "-F${OPENGOAL_ANGLE_DIR}")
+        target_link_libraries(og_angle INTERFACE "-framework libEGL" "-framework libGLESv2")
+    else()
+        # macOS: two dylibs named ./lib*.dylib; give them @rpath names so they load from the
+        # bundle's Frameworks folder, next to each other (libEGL opens libGLESv2 at runtime).
+        set(OG_ANGLE_LIB_DIR "${CMAKE_BINARY_DIR}/angle")
+        file(MAKE_DIRECTORY "${OG_ANGLE_LIB_DIR}")
+        foreach(OG_ANGLE_LIB libEGL libGLESv2)
+            file(COPY_FILE "${OPENGOAL_ANGLE_DIR}/${OG_ANGLE_LIB}.dylib"
+                 "${OG_ANGLE_LIB_DIR}/${OG_ANGLE_LIB}.dylib" ONLY_IF_DIFFERENT)
+            execute_process(COMMAND install_name_tool -id "@rpath/${OG_ANGLE_LIB}.dylib"
+                                    "${OG_ANGLE_LIB_DIR}/${OG_ANGLE_LIB}.dylib" ERROR_QUIET)
+            execute_process(COMMAND codesign --force -s - "${OG_ANGLE_LIB_DIR}/${OG_ANGLE_LIB}.dylib"
+                            OUTPUT_QUIET ERROR_QUIET)
+        endforeach()
+        target_link_libraries(og_angle INTERFACE "${OG_ANGLE_LIB_DIR}/libEGL.dylib"
+                                                 "${OG_ANGLE_LIB_DIR}/libGLESv2.dylib")
+    endif()
+endif()
+
 build_third_party_lib(imgui imgui)
 
 # build the game code in C++

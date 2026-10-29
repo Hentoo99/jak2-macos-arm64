@@ -22,32 +22,42 @@ out vec2 vtx_st;
 
 out float fog;
 
-struct MercMatrixData {
-  mat4 X;
-  mat3 R;
-  vec4 pad;
-};
+// Skinning matrices live in an RGBA32F texture, 8 texels per bone (X: 4 columns, R: 3 columns and
+// padding), 1024 texels per row.  A per-draw base offset replaces the per-draw uniform buffer range,
+// which ANGLE on Metal mishandles and which is costly there (from ottsel, ISC).
+uniform sampler2D tex_T10;
+uniform int bone_base;
 
-layout (std140) uniform ub_bones {
-  MercMatrixData bones[128];
-};
+vec4 bone_texel(int v) {
+  return texelFetch(tex_T10, ivec2(v & 1023, v >> 10), 0);
+}
+
+mat4 bone_X(uint m) {
+  int b = bone_base + int(m) * 8;
+  return mat4(bone_texel(b), bone_texel(b + 1), bone_texel(b + 2), bone_texel(b + 3));
+}
+
+mat3 bone_R(uint m) {
+  int b = bone_base + int(m) * 8 + 4;
+  return mat3(bone_texel(b).xyz, bone_texel(b + 1).xyz, bone_texel(b + 2).xyz);
+}
 
 
 void main() {
 
 
   vec4 p = vec4(position_in, 1);
-  vec4 vtx_pos = -bones[mats[0]].X * p * weights_in[0];
-  vec3 rotated_nrm = bones[mats[0]].R * normal_in * weights_in[0];
+  vec4 vtx_pos = -bone_X(mats[0]) * p * weights_in[0];
+  vec3 rotated_nrm = bone_R(mats[0]) * normal_in * weights_in[0];
 
   // game may send garbage bones if the weight is 0, don't let NaNs sneak in.
   if (weights_in[1] > 0) {
-    vtx_pos += -bones[mats[1]].X * p * weights_in[1];
-    rotated_nrm += bones[mats[1]].R * normal_in * weights_in[1];
+    vtx_pos += -bone_X(mats[1]) * p * weights_in[1];
+    rotated_nrm += bone_R(mats[1]) * normal_in * weights_in[1];
   }
   if (weights_in[2] > 0) {
-    vtx_pos += -bones[mats[2]].X * p * weights_in[2];
-    rotated_nrm += bones[mats[2]].R * normal_in * weights_in[2];
+    vtx_pos += -bone_X(mats[2]) * p * weights_in[2];
+    rotated_nrm += bone_R(mats[2]) * normal_in * weights_in[2];
   }
 
   vec4 transformed = perspective_matrix * vtx_pos;

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdio>
 
+#include "common/platform/BuildConfig.h"
 #include "common/util/Assert.h"
 
 #include "game/graphics/opengl_renderer/BucketRenderer.h"
@@ -30,8 +31,15 @@ FramebufferTexturePair::FramebufferTexturePair(int w, int h, u64 texture_format,
     glBindTexture(GL_TEXTURE_2D, m_texture);
     // I don't know if we really need to do this. whatever uses this texture should figure it out.
 
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, m_texture, i);
-    GLenum draw_buffers[1] = {GLenum(GL_COLOR_ATTACHMENT0 + i)};
+#if OG_GRAPHICS_BACKEND_GLES
+    // ES 3.0 requires draw buffer 0 to be COLOR_ATTACHMENT0; each level has its own framebuffer, so
+    // attaching every level there is equivalent (from ottsel, ISC).
+    const GLenum attachment = GL_COLOR_ATTACHMENT0;
+#else
+    const GLenum attachment = GL_COLOR_ATTACHMENT0 + i;
+#endif
+    glFramebufferTexture(GL_FRAMEBUFFER, attachment, m_texture, i);
+    GLenum draw_buffers[1] = {attachment};
     glDrawBuffers(1, draw_buffers);
     auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {

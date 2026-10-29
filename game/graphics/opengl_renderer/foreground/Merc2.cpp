@@ -57,31 +57,10 @@ Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
   glGenVertexArrays(1, &m_vao);
   glBindVertexArray(m_vao);
 
-  // Bone buffer to store skinning matrices for multiple draws
-  glGenBuffers(1, &m_bones_buffer);
-  glBindBuffer(GL_UNIFORM_BUFFER, m_bones_buffer);
-
-  // zero initialize the bone buffer.
-  std::vector<u8> temp(MAX_SHADER_BONE_VECTORS * sizeof(math::Vector4f));
-  glBufferData(GL_UNIFORM_BUFFER, MAX_SHADER_BONE_VECTORS * sizeof(math::Vector4f), temp.data(),
-               GL_DYNAMIC_DRAW);
-  glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-  // annoyingly, glBindBufferRange can have alignment restrictions that vary per platform.
-  // the GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT gives us the minimum alignment for views into the bone
-  // buffer. The bone buffer stores things per-16-byte "quadword".
-  GLint val;
-  glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &val);
-  if (val <= 16) {
-    // somehow doubt this can happen, but just in case
-    m_opengl_buffer_alignment = 1;
-  } else {
-    m_opengl_buffer_alignment = val / 16;  // number of bone vectors
-    if (m_opengl_buffer_alignment * 16 != (u32)val) {
-      ASSERT_MSG(false,
-                 fmt::format("opengl uniform buffer alignment is {}, which is strange\n", val));
-    }
-  }
+  // Skinning matrices go in bone textures (next_bone_texture).  Each draw selects its bones with a
+  // base-offset uniform, so no per-draw buffer binding (or binding alignment) is needed.
+  static_assert(MAX_SHADER_BONE_VECTORS % BONE_TEXTURE_WIDTH == 0);
+  m_opengl_buffer_alignment = 1;
 
   // initialize draw buffers, these will store lists of draws to flush.
   for (int i = 0; i < MAX_LEVELS; i++) {
@@ -108,7 +87,9 @@ Merc2::~Merc2() {
     glDeleteVertexArrays(1, &x.vao);
   }
 
-  glDeleteBuffers(1, &m_bones_buffer);
+  for (auto& set : m_bone_textures) {
+    glDeleteTextures(set.size(), set.data());
+  }
   glDeleteVertexArrays(1, &m_vao);
 }
 
@@ -751,6 +732,7 @@ void Merc2::init_shader_common(Shader& shader, Uniforms* uniforms, bool include_
   uniforms->ignore_alpha = glGetUniformLocation(id, "ignore_alpha");
 
   uniforms->gfx_hack_no_tex = glGetUniformLocation(id, "gfx_hack_no_tex");
+  uniforms->bone_base = glGetUniformLocation(id, "bone_base");
 }
 
 void Merc2::switch_to_merc2(SharedRenderState* render_state) {
@@ -1000,6 +982,27 @@ void Merc2::handle_merc_chain(DmaFollower& dma,
  * Queue up some bones to be included in the bone buffer.
  * Returns the index of the first bone vector.
  */
+GLuint Merc2::next_bone_texture(u64 frame_idx) {
+  if (frame_idx != m_bone_texture_frame) {
+    m_bone_texture_frame = frame_idx;
+    m_bone_texture_next = 0;
+  }
+  auto& set = m_bone_textures[frame_idx % BONE_TEXTURE_FRAMES];
+  if (m_bone_texture_next == set.size()) {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, BONE_TEXTURE_WIDTH,
+                 MAX_SHADER_BONE_VECTORS / BONE_TEXTURE_WIDTH, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    set.push_back(tex);
+  }
+  return set[m_bone_texture_next++];
+}
+
 u32 Merc2::alloc_bones(int count, ShaderMercMat* data) {
   u32 first_bone_vector = m_next_free_bone_vector;
   ASSERT(count * 8 + first_bone_vector <= MAX_SHADER_BONE_VECTORS);
@@ -1183,6 +1186,18 @@ void Merc2::flush_draw_buckets(SharedRenderState* render_state,
                                ScopedProfilerNode& prof,
                                MercDebugStats* stats) {
   stats->num_draw_flush++;
+
+  // Upload every bone used this flush once, as whole texture rows.
+  const u32 bone_rows = (m_next_free_bone_vector + BONE_TEXTURE_WIDTH - 1) / BONE_TEXTURE_WIDTH;
+  stats->num_bones_uploaded += m_next_free_bone_vector;
+  glActiveTexture(GL_TEXTURE0 + BONE_TEXTURE_UNIT);
+  glBindTexture(GL_TEXTURE_2D, next_bone_texture(render_state->frame_idx));
+  if (bone_rows) {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, BONE_TEXTURE_WIDTH, bone_rows, GL_RGBA, GL_FLOAT,
+                    m_shader_bone_vector_buffer);
+  }
+  glActiveTexture(GL_TEXTURE0);
+
   for (u32 li = 0; li < m_next_free_level_bucket; li++) {
     const auto& lev_bucket = m_level_draw_buckets[li];
     const auto* lev = lev_bucket.level;
@@ -1190,12 +1205,6 @@ void Merc2::flush_draw_buckets(SharedRenderState* render_state,
     glBindBuffer(GL_ARRAY_BUFFER, lev->merc_vertices);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lev->merc_indices);
     setup_merc_vao();
-    stats->num_bones_uploaded += m_next_free_bone_vector;
-
-    glBindBuffer(GL_UNIFORM_BUFFER, m_bones_buffer);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, m_next_free_bone_vector * sizeof(math::Vector4f),
-                    m_shader_bone_vector_buffer);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     switch_to_merc2(render_state);
     do_draws(lev_bucket.draws.data(), lev, lev_bucket.next_free_draw, m_merc_uniforms, prof, false,
@@ -1323,8 +1332,7 @@ void Merc2::do_draws(const Draw* draw_array,
 
       prof.add_draw_call(2);
       prof.add_tri(draw.num_triangles * 2);
-      glBindBufferRange(GL_UNIFORM_BUFFER, 1, m_bones_buffer,
-                        sizeof(math::Vector4f) * draw.first_bone, 128 * sizeof(ShaderMercMat));
+      glUniform1i(uniforms.bone_base, draw.first_bone);
       // draw rgb
       const auto& l1_dir = m_lights_buffer[draw.light_idx].direction1;
       math::Vector4f l1_dir_f(l1_dir.x(), l1_dir.y(), l1_dir.z(), 1);
@@ -1345,8 +1353,7 @@ void Merc2::do_draws(const Draw* draw_array,
       setup_opengl_from_draw_mode(draw.mode, GL_TEXTURE0, use_mipmaps_for_filtering);
       prof.add_draw_call();
       prof.add_tri(draw.num_triangles);
-      glBindBufferRange(GL_UNIFORM_BUFFER, 1, m_bones_buffer,
-                        sizeof(math::Vector4f) * draw.first_bone, 128 * sizeof(ShaderMercMat));
+      glUniform1i(uniforms.bone_base, draw.first_bone);
       glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
     }

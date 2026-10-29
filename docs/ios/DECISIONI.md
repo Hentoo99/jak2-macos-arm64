@@ -251,3 +251,48 @@ cambi di livello e missione; funziona.
    firmato. È voluto.
 3. **Prossimo passo.** Target iOS (ANGLE/GLES, shell, pack dati), dove il divieto di JIT è
    imposto dal sistema.
+
+---
+
+## Fase 3 (in corso) — grafica OpenGL ES 3 / ANGLE su macOS (2026-10-29)
+
+`OPENGOAL_GRAPHICS_BACKEND=GLES` (ADR-IOS-003): lo stesso renderer OpenGL su OpenGL ES 3.0 di
+ANGLE (Metal). Si configura con `-DOPENGOAL_ANGLE_DIR=<ANGLE prebuilt>`, che sta fuori dal repo;
+la build di prova è `build-arm64-gles` (JIT + GLES).
+
+Componenti:
+- `game/graphics/gles_compat.{h,cpp}` (da ottsel, ISC). Viene incluso forzatamente nei sorgenti
+  grafici e copre texture 1D → 2D piegate in righe da 1024, formati `8_8_8_8_REV`,
+  `glMultiDrawElements`, primitive restart a indice fisso e le chiamate solo-desktop.
+- `scripts/translate_gl_shaders_es.py` (da ottsel, costanti di Jak 2). Traduce GLSL 410 in
+  ES 300 via glslang e SPIRV-Cross in `out/gles-shaders` durante la build: 92 shader su 92.
+- `opengl.cpp`: finestra SDL Metal, contesto EGL di ANGLE, `eglSwapBuffers`, ImGui sul backend
+  ES3. L'output `KHR_debug` di ANGLE finisce nel log.
+- ANGLE (dylib con nomi `@rpath`) copiato nel bundle `Frameworks/`.
+
+Correzioni verificate con l'output di debug di ANGLE e con screenshot A/B rispetto al GL desktop:
+1. **Merc2.** Bone da UBO a texture RGBA32F con `bone_base` per draw (da ottsel). Su ANGLE gli UBO
+   per draw producevano esplosioni di geometria. Vale per tutti i backend: sul desktop il
+   risultato è identico.
+2. **`FramebufferTexturePair`.** In ES il draw buffer 0 deve essere `COLOR_ATTACHMENT0`.
+3. **`GlowRenderer`.** Al ridimensionamento la texture di sonda viene ricreata
+   `DEPTH24_STENCIL8`, come all'inizializzazione. Prima era `GL_DEPTH_COMPONENT` e ES rifiutava
+   il blit di profondità.
+
+Strumenti di sviluppo, sempre disponibili e inattivi senza variabili d'ambiente:
+- `OPENGOAL_SCREENSHOT_FRAMES="1196,1500"`: salva `screenshots/frame-<n>.png`;
+- `OPENGOAL_DISABLE_RENDERERS="tie,merc"`: disattiva renderer dall'avvio;
+- `OPENGOAL_DISABLE_RENDERERS_AT="1200:tie-l"`: li disattiva da un frame preciso, così due
+  screenshot ravvicinati confrontano la stessa scena.
+
+**Ancora aperti in GLES** (titolo di Haven City; assenti sul GL desktop):
+- un triangolo nero su un cartellone, prodotto da un **TIE normale**: sparisce spegnendo
+  `tie-lN-tfrag` e resta spegnendo `etie`. Si è verificato che non dipende da primitive restart
+  (attivo), dal percorso multidraw (identico in single-draw) né dai fan di TextureAnimator;
+- sottili strisce colorate, che restano spegnendo shadow, sprite, merc, tie e generic uno alla
+  volta. Non è ancora attribuito;
+- il cielo diventa ciano a tratti e un'insegna al neon è deformata, probabilmente per
+  TextureAnimator.
+
+Le prove con Shadow2 a liste di triangoli e con i fan di TextureAnimator convertiti non hanno
+cambiato nulla e sono state annullate.

@@ -108,6 +108,8 @@ class Merc2 {
   static constexpr int MAX_SKEL_BONES = 128;
   static constexpr int BONE_VECTORS_PER_BONE = 7;
   static constexpr int MAX_SHADER_BONE_VECTORS = 1024 * 32;  // ??
+  static constexpr int BONE_TEXTURE_WIDTH = 1024;  // must match bone_texel() in merc2/emerc.vert
+  static constexpr int BONE_TEXTURE_UNIT = 10;     // tex_T10 in merc2/emerc.vert
 
   static constexpr int MAX_LEVELS = 3;
   static constexpr int MAX_DRAWS_PER_LEVEL = 2048 * 2;
@@ -135,6 +137,7 @@ class Merc2 {
     GLuint gfx_hack_no_tex;
 
     GLuint fade;
+    GLuint bone_base;
   };
 
   Uniforms m_merc_uniforms, m_emerc_uniforms;
@@ -172,7 +175,14 @@ class Merc2 {
 
   ModBuffers alloc_mod_vtx_buffer(const LevelData* lev);
 
-  GLuint m_bones_buffer;
+  // Bone textures: a fresh one for every flush, in sets used on rotating frames.  ANGLE on Metal
+  // can write a texture the GPU is not using straight from the CPU; rewriting one that earlier
+  // draws in the frame still read costs a staging buffer and a blit (from ottsel, ISC).
+  static constexpr int BONE_TEXTURE_FRAMES = 3;
+  std::vector<GLuint> m_bone_textures[BONE_TEXTURE_FRAMES];
+  u64 m_bone_texture_frame = UINT64_MAX;
+  size_t m_bone_texture_next = 0;
+  GLuint next_bone_texture(u64 frame_idx);
 
   enum DrawFlags {
     IGNORE_ALPHA = 1,

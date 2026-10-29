@@ -14,6 +14,7 @@
 #include "common/global_profiler/GlobalProfiler.h"
 #include "common/goal_constants.h"
 #include "common/log/log.h"
+#include "common/platform/BuildConfig.h"
 #include "common/util/FileUtil.h"
 #include "common/util/FrameLimiter.h"
 #include "common/util/Timer.h"
@@ -44,6 +45,15 @@
 #include "common/util/string_util.h"
 
 #include "third-party/stb_image/stb_image.h"
+
+#if OG_GRAPHICS_BACKEND_GLES
+#include "game/graphics/gles_compat.h"
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <EGL/eglext_angle.h>
+
+#include "third-party/SDL/include/SDL3/SDL_metal.h"
+#endif
 
 constexpr bool run_dma_copy = false;
 
@@ -97,6 +107,94 @@ struct GraphicsData {
 std::unique_ptr<GraphicsData> g_gfx_data;
 
 static bool gl_inited = false;
+
+#if OG_GRAPHICS_BACKEND_GLES
+namespace {
+// OpenGL ES 3.0 from ANGLE (on Metal), presenting into the window's CAMetalLayer.  There is one
+// window, so the EGL state lives here instead of in GLDisplay.
+EGLDisplay g_egl_display = EGL_NO_DISPLAY;
+EGLSurface g_egl_surface = EGL_NO_SURFACE;
+EGLContext g_egl_context = EGL_NO_CONTEXT;
+SDL_MetalView g_metal_view = nullptr;
+
+bool create_angle_context(SDL_Window* window) {
+  g_metal_view = SDL_Metal_CreateView(window);
+  void* layer = g_metal_view ? SDL_Metal_GetLayer(g_metal_view) : nullptr;
+  if (!layer) {
+    sdl_util::log_error("GLES: could not create a Metal layer for the window");
+    return false;
+  }
+  const EGLAttrib display_attribs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE,
+                                       EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE, EGL_NONE};
+  g_egl_display = eglGetPlatformDisplay(
+      EGL_PLATFORM_ANGLE_ANGLE, reinterpret_cast<void*>(EGL_DEFAULT_DISPLAY), display_attribs);
+  EGLint major = 0, minor = 0;
+  if (g_egl_display == EGL_NO_DISPLAY || !eglInitialize(g_egl_display, &major, &minor)) {
+    lg::error("GLES: ANGLE Metal display failed: 0x{:x}", eglGetError());
+    return false;
+  }
+  eglBindAPI(EGL_OPENGL_ES_API);
+  const EGLint config_attribs[] = {EGL_RED_SIZE,
+                                   8,
+                                   EGL_GREEN_SIZE,
+                                   8,
+                                   EGL_BLUE_SIZE,
+                                   8,
+                                   EGL_ALPHA_SIZE,
+                                   8,
+                                   EGL_DEPTH_SIZE,
+                                   24,
+                                   EGL_STENCIL_SIZE,
+                                   8,
+                                   EGL_SURFACE_TYPE,
+                                   EGL_WINDOW_BIT,
+                                   EGL_RENDERABLE_TYPE,
+                                   EGL_OPENGL_ES3_BIT,
+                                   EGL_NONE};
+  EGLConfig config = nullptr;
+  EGLint configs = 0;
+  if (!eglChooseConfig(g_egl_display, config_attribs, &config, 1, &configs) || configs < 1) {
+    lg::error("GLES: no RGBA8/D24S8 ES 3.0 config: 0x{:x}", eglGetError());
+    return false;
+  }
+  g_egl_surface = eglCreateWindowSurface(g_egl_display, config, layer, nullptr);
+  const EGLint context_attribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0,
+                                    EGL_NONE};
+  g_egl_context = eglCreateContext(g_egl_display, config, EGL_NO_CONTEXT, context_attribs);
+  if (g_egl_surface == EGL_NO_SURFACE || g_egl_context == EGL_NO_CONTEXT ||
+      !eglMakeCurrent(g_egl_display, g_egl_surface, g_egl_surface, g_egl_context)) {
+    lg::error("GLES: surface/context failed: 0x{:x}", eglGetError());
+    return false;
+  }
+  lg::info("GLES: EGL {}.{} on ANGLE (Metal)", major, minor);
+  return true;
+}
+
+void* angle_proc_address(const char* name) {
+  return reinterpret_cast<void*>(eglGetProcAddress(name));
+}
+
+void destroy_angle_context() {
+  if (g_egl_display != EGL_NO_DISPLAY) {
+    eglMakeCurrent(g_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    if (g_egl_context != EGL_NO_CONTEXT) {
+      eglDestroyContext(g_egl_display, g_egl_context);
+    }
+    if (g_egl_surface != EGL_NO_SURFACE) {
+      eglDestroySurface(g_egl_display, g_egl_surface);
+    }
+    eglTerminate(g_egl_display);
+  }
+  g_egl_display = EGL_NO_DISPLAY;
+  g_egl_surface = EGL_NO_SURFACE;
+  g_egl_context = EGL_NO_CONTEXT;
+  if (g_metal_view) {
+    SDL_Metal_DestroyView(g_metal_view);
+    g_metal_view = nullptr;
+  }
+}
+}  // namespace
+#endif
 static int gl_init(GfxGlobalSettings& settings) {
   prof().instant_event("ROOT");
   Timer gl_init_timer;
@@ -175,7 +273,12 @@ static void init_imgui(SDL_Window* window,
   ImGui::applyFontStyle();
 
   // set up to get inputs for this window
+#if OG_GRAPHICS_BACKEND_GLES
+  (void)gl_context;
+  ImGui_ImplSDL3_InitForOther(window);
+#else
   ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
+#endif
 
   // NOTE: imgui's setup calls functions that may fail intentionally, and attempts to disable error
   // reporting so these errors are invisible. But it does not work, and some weird X11 default
@@ -195,9 +298,14 @@ static std::shared_ptr<GfxDisplay> gl_make_display(int width,
   // Setup the window
   prof().instant_event("ROOT");
   prof().begin_event("startup::sdl::create_window");
+#if OG_GRAPHICS_BACKEND_GLES
+  constexpr SDL_WindowFlags kGraphicsApiFlag = SDL_WINDOW_METAL;
+#else
+  constexpr SDL_WindowFlags kGraphicsApiFlag = SDL_WINDOW_OPENGL;
+#endif
   SDL_Window* window =
       SDL_CreateWindow(title, width, height,
-                       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                       kGraphicsApiFlag | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   prof().end_event();
   if (!window) {
     sdl_util::log_error("gl_make_display failed - Could not create display window");
@@ -210,6 +318,17 @@ static std::shared_ptr<GfxDisplay> gl_make_display(int width,
 
   // Make an OpenGL Context
   prof().begin_event("startup::sdl::create_context");
+#if OG_GRAPHICS_BACKEND_GLES
+  // The EGL context is held in g_egl_*; GLDisplay's SDL context stays null.
+  SDL_GLContext gl_context = nullptr;
+  const bool context_ok = create_angle_context(window);
+  prof().end_event();
+  if (!context_ok) {
+    dialogs::create_error_message_dialog("Critical Error Encountered",
+                                         "Unable to create an OpenGL ES 3.0 context with ANGLE.");
+    return NULL;
+  }
+#else
   SDL_GLContext gl_context = SDL_GL_CreateContext(window);
   prof().end_event();
   if (!gl_context) {
@@ -221,6 +340,9 @@ static std::shared_ptr<GfxDisplay> gl_make_display(int width,
     return NULL;
   }
 
+#endif
+
+#if !OG_GRAPHICS_BACKEND_GLES
   {
     auto p = scoped_prof("startup::sdl::assign_context");
     if (!SDL_GL_MakeCurrent(window, gl_context)) {
@@ -232,12 +354,39 @@ static std::shared_ptr<GfxDisplay> gl_make_display(int width,
       return NULL;
     }
   }
+#endif
 
   if (!gl_inited) {
     {
       auto p = scoped_prof("startup::sdl::glad_init");
+#if OG_GRAPHICS_BACKEND_GLES
+      // gladLoadGL() would look for desktop OpenGL; resolve everything through ANGLE instead.
+      const bool loaded = gladLoadGLLoader((GLADloadproc)angle_proc_address) != 0;
+      if (loaded) {
+        og_gles_load_missing(angle_proc_address);
+        // ANGLE reports rejected calls and validation failures through KHR_debug.
+        using DebugProc =
+            void (*)(GLenum, GLenum, GLuint, GLenum, GLsizei, const GLchar*, const void*);
+        using SetCallback = void (*)(DebugProc, const void*);
+        if (auto set_callback = (SetCallback)eglGetProcAddress("glDebugMessageCallbackKHR")) {
+          glad_glEnable(0x92E0 /* GL_DEBUG_OUTPUT_KHR */);
+          set_callback(
+              [](GLenum, GLenum type, GLuint id, GLenum severity, GLsizei, const GLchar* message,
+                 const void*) {
+                static int count = 0;
+                if (severity != 0x826B /* GL_DEBUG_SEVERITY_NOTIFICATION */ && count++ < 200) {
+                  lg::warn("ANGLE: type=0x{:x} id={} severity=0x{:x} {}", type, id, severity,
+                           message);
+                }
+              },
+              nullptr);
+        }
+      }
+      if (!loaded) {
+#else
       gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress);
       if (!gladLoadGL()) {
+#endif
         lg::error("GL init fail");
         dialogs::create_error_message_dialog("Critical Error Encountered",
                                              "Unable to initialize OpenGL API.\nOpenGOAL requires "
@@ -300,7 +449,9 @@ static std::shared_ptr<GfxDisplay> gl_make_display(int width,
   {
     auto p = scoped_prof("startup::sdl::init_imgui");
     // setup imgui
-#ifdef __APPLE__
+#if OG_GRAPHICS_BACKEND_GLES
+    init_imgui(window, gl_context, "#version 300 es");
+#elif defined(__APPLE__)
     init_imgui(window, gl_context, "#version 410");
 #else
     init_imgui(window, gl_context, "#version 430");
@@ -350,7 +501,7 @@ void GLDisplay::init_splash() {
   if (!Gfx::g_splash.ready.load())
     return;
 
-  auto shader_folder = "game/graphics/opengl_renderer/shaders";
+  auto shader_folder = Shader::shader_folder;
   auto vert_src =
       file_util::read_text_file(file_util::get_file_path({shader_folder, "splash.vert"}));
   auto frag_src =
@@ -449,7 +600,11 @@ GLDisplay::~GLDisplay() {
   ImGui_ImplSDL3_Shutdown();
   ImGui::DestroyContext();
   // Cleanup SDL
+#if OG_GRAPHICS_BACKEND_GLES
+  destroy_angle_context();
+#else
   SDL_GL_DestroyContext(m_gl_context);
+#endif
   SDL_DestroyWindow(m_window);
   // cleanup SDL related sub-systems before we quit SDL
   if (m_display_manager) {
@@ -691,7 +846,11 @@ void GLDisplay::render() {
 
   {
     auto p = scoped_prof("swap-buffers");
+#if OG_GRAPHICS_BACKEND_GLES
+    eglSwapBuffers(g_egl_display, g_egl_surface);
+#else
     SDL_GL_SwapWindow(m_window);
+#endif
   }
 
   // actually wait for vsync
@@ -704,7 +863,11 @@ void GLDisplay::render() {
     Gfx::g_global_settings.old_vsync = Gfx::g_global_settings.vsync;
     // NOTE - -1 can be used for adaptive vsync, maybe useful for Jak 2+?
     // https://wiki.libsdl.org/SDL3/SDL_GL_SetSwapInterval
+#if OG_GRAPHICS_BACKEND_GLES
+    eglSwapInterval(g_egl_display, Gfx::g_global_settings.vsync);
+#else
     SDL_GL_SetSwapInterval(Gfx::g_global_settings.vsync);
+#endif
   }
 
   // Start timing for the next frame.

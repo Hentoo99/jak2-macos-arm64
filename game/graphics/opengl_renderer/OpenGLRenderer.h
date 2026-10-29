@@ -89,6 +89,7 @@ class OpenGLRenderer {
   void blit_display(ScopedProfilerNode& prof);
   void init_bucket_renderers_jak1();
   void init_bucket_renderers_jak2();
+  void disable_renderers_matching(const std::string& comma_separated_patterns);
   void init_bucket_renderers_jak3();
   void draw_renderer_selection_window();
   void finish_screenshot(const std::string& output_name,

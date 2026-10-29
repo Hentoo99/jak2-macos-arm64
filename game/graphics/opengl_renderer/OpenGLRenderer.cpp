@@ -163,6 +163,28 @@ OpenGLRenderer::OpenGLRenderer(std::shared_ptr<TexturePool> texture_pool,
     default:
       ASSERT(false);
   }
+
+  // Development aid: OPENGOAL_DISABLE_RENDERERS="merc,generic" disables every bucket renderer
+  // whose name contains one of the substrings, to bisect rendering problems on a new backend.
+  if (const char* env = std::getenv("OPENGOAL_DISABLE_RENDERERS")) {
+    disable_renderers_matching(env);
+  }
+}
+
+void OpenGLRenderer::disable_renderers_matching(const std::string& comma_separated_patterns) {
+  const auto patterns = str_util::split(comma_separated_patterns, ',');
+  for (auto& renderer : m_bucket_renderers) {
+    if (!renderer) {
+      continue;
+    }
+    for (const auto& pattern : patterns) {
+      if (!pattern.empty() && renderer->name().find(pattern) != std::string::npos) {
+        renderer->enabled() = false;
+        lg::info("disabled renderer {}", renderer->name());
+        break;
+      }
+    }
+  }
 }
 
 void OpenGLRenderer::init_bucket_renderers_jak3() {
@@ -981,7 +1003,34 @@ void OpenGLRenderer::blit_display(ScopedProfilerNode& prof) {
 /*!
  * Main render function. This is called from the gfx loop with the chain passed from the game.
  */
-void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
+void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& render_settings) {
+  // Development aids, counted in rendered frames:
+  //  OPENGOAL_SCREENSHOT_FRAMES="900,1800" saves a window-resolution frame-<n>.png at those frames;
+  //  OPENGOAL_DISABLE_RENDERERS_AT="1301:tie" disables renderers from that frame on, so screenshots
+  //  just before and after compare the same scene with and without them.
+  RenderOptions settings = render_settings;
+  {
+    static const char* disable_at = std::getenv("OPENGOAL_DISABLE_RENDERERS_AT");
+    static const std::vector<std::string> screenshot_frames = [] {
+      const char* env = std::getenv("OPENGOAL_SCREENSHOT_FRAMES");
+      return env ? str_util::split(env, ',') : std::vector<std::string>{};
+    }();
+    static u64 frame = 0;
+    const std::string frame_str = std::to_string(++frame);
+    if (disable_at) {
+      const std::string spec = disable_at;
+      const auto colon = spec.find(':');
+      if (colon != std::string::npos && frame_str == spec.substr(0, colon)) {
+        disable_renderers_matching(spec.substr(colon + 1));
+      }
+    }
+    if (!settings.save_screenshot && std::find(screenshot_frames.begin(), screenshot_frames.end(),
+                                               frame_str) != screenshot_frames.end()) {
+      settings.save_screenshot = true;
+      settings.screenshot_path =
+          file_util::make_screenshot_filepath(m_version, "frame-" + frame_str);
+    }
+  }
   m_profiler.clear();
   m_render_state.reset();
   m_render_state.ee_main_memory = g_ee_main_mem;

@@ -216,6 +216,16 @@ else()
     list(APPEND RUNTIME_SOURCE "../third-party/glad/src/glad.c")
 endif()
 
+if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+    # The OpenGL renderer on OpenGL ES 3.0: every graphics source sees gles_compat.h first, which
+    # maps the few desktop-only GL calls the renderer makes onto ES 3.0.
+    list(APPEND RUNTIME_SOURCE graphics/gles_compat.cpp)
+    set(OG_GLES_SOURCES ${RUNTIME_SOURCE})
+    list(FILTER OG_GLES_SOURCES INCLUDE REGEX "^graphics/.*\\.cpp$")
+    set_source_files_properties(${OG_GLES_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/graphics/gles_compat.h")
+endif()
+
 if(OG_TARGET_IOS)
     list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^external/discord")
     list(FILTER RUNTIME_SOURCE EXCLUDE REGEX "^tools/")
@@ -232,6 +242,22 @@ add_subdirectory(sound)
 add_library(runtime STATIC ${RUNTIME_SOURCE})
 
 target_link_libraries(runtime common fmt SDL3::SDL3 imgui sound stb_image libco libcurl)
+if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+    target_link_libraries(runtime og_angle)
+    # GLSL ES 3.00 versions of the renderer's shaders, loaded from out/gles-shaders at runtime.
+    file(GLOB OG_GL_SHADERS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/graphics/opengl_renderer/shaders/*.vert"
+        "${CMAKE_CURRENT_SOURCE_DIR}/graphics/opengl_renderer/shaders/*.frag")
+    set(OG_GLES_SHADER_DIR "${PROJECT_SOURCE_DIR}/out/gles-shaders")
+    add_custom_command(
+        OUTPUT "${OG_GLES_SHADER_DIR}/.stamp"
+        COMMAND python3 -I "${PROJECT_SOURCE_DIR}/scripts/translate_gl_shaders_es.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/graphics/opengl_renderer/shaders" "${OG_GLES_SHADER_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${OG_GLES_SHADER_DIR}/.stamp"
+        DEPENDS ${OG_GL_SHADERS} "${PROJECT_SOURCE_DIR}/scripts/translate_gl_shaders_es.py"
+        VERBATIM)
+    add_custom_target(og-gles-shaders DEPENDS "${OG_GLES_SHADER_DIR}/.stamp")
+endif()
 if(NOT OG_TARGET_IOS)
     target_link_libraries(runtime discord-rpc)
 endif()
@@ -246,6 +272,17 @@ endif()
 
 add_executable(gk main.cpp)
 target_link_libraries(gk runtime)
+if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "GLES")
+    add_dependencies(gk og-gles-shaders)
+    if(OG_ANGLE_LIB_DIR)
+        # macOS: ship ANGLE's dylibs in the bundle (BUILD_RPATH below points there).
+        add_custom_command(TARGET gk POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:gk>/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${OG_ANGLE_LIB_DIR}/libEGL.dylib"
+                    "${OG_ANGLE_LIB_DIR}/libGLESv2.dylib" "$<TARGET_BUNDLE_CONTENT_DIR:gk>/Frameworks/"
+            VERBATIM)
+    endif()
+endif()
 if(OG_EXECUTION_MODE_AOT)
     # Signed GOAL code from jak2-aot-emit (docs/ios/DECISIONI.md).  The arena layout is listed
     # first so the linker places the __ARENA segment (the EE memory) before __GOAL, keeping all

@@ -68,6 +68,22 @@
 #undef glTexImage2DMultisample
 #define glTexImage2DMultisample(a, b, c, d, e, f) ((void)0)
 
+// ANGLE's Metal backend drops primitive restart when an indexed strip reads a vertex buffer that
+// is not GL_STATIC_DRAW (streamed sprites, effects and debug geometry join into long triangles).
+// Those draws are turned into triangle lists here; see og_gles_draw_elements.
+#undef glBufferData
+#define glBufferData og_gles_buffer_data
+#undef glBufferSubData
+#define glBufferSubData og_gles_buffer_sub_data
+#undef glDeleteBuffers
+#define glDeleteBuffers og_gles_delete_buffers
+#undef glDrawElements
+#define glDrawElements og_gles_draw_elements
+
+void og_gles_buffer_data(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+void og_gles_buffer_sub_data(GLenum target, GLintptr offset, GLsizeiptr size, const void* data);
+void og_gles_delete_buffers(GLsizei n, const GLuint* buffers);
+void og_gles_draw_elements(GLenum mode, GLsizei count, GLenum type, const void* offset);
 void og_gles_multi_draw_elements(GLenum mode,
                                  const GLsizei* count,
                                  GLenum type,

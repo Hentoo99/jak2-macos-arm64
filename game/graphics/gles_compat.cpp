@@ -2,14 +2,140 @@
 // (game/graphics/ottsel_gles.cpp, ISC, (c) 2026 Chris Sotraidis).
 #include "game/graphics/gles_compat.h"
 
+#include <cstring>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+
+#include "common/common_types.h"
 
 namespace {
 GLenum g_active_unit = GL_TEXTURE0;
 std::unordered_map<GLenum, GLuint> g_bound_2d;                      // texture unit -> bound 2D id
 std::unordered_map<GLuint, std::pair<GLint, GLint>> g_level0_size;  // 2D id -> level-0 size
+
+std::unordered_map<GLuint, GLenum> g_array_usage;  // vertex buffer id -> usage of its last upload
+
+//! A non-static index buffer's contents, and the same strips as a triangle list (made on demand).
+struct StripIndices {
+  std::vector<u32> indices;
+  bool converted = false;
+  GLuint triangles = 0;  // buffer holding the triangle list
+  std::vector<u32>
+      start;  // start[i]: first triangle-list index made from the strips at indices[i:]
+};
+std::unordered_map<GLuint, StripIndices> g_strips;  // index buffer id -> contents
+
+GLuint bound_buffer(GLenum binding) {
+  GLint id = 0;
+  glad_glGetIntegerv(binding, &id);
+  return (GLuint)id;
+}
+
+void convert_strips(StripIndices& s) {
+  std::vector<u32> tris;
+  s.start.resize(s.indices.size() + 1);
+  u32 run = 0;  // vertices since the last restart
+  for (size_t i = 0; i < s.indices.size(); i++) {
+    s.start[i] = (u32)tris.size();
+    const u32 v = s.indices[i];
+    if (v == UINT32_MAX) {
+      run = 0;
+      continue;
+    }
+    if (++run >= 3) {
+      // keep the strip's winding: odd triangles swap their first two vertices
+      const u32 a = s.indices[i - 2], b = s.indices[i - 1];
+      if (run % 2) {
+        tris.insert(tris.end(), {a, b, v});
+      } else {
+        tris.insert(tris.end(), {b, a, v});
+      }
+    }
+  }
+  s.start.back() = (u32)tris.size();
+  if (!s.triangles) {
+    glad_glGenBuffers(1, &s.triangles);
+  }
+  const GLuint strips = bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING);
+  glad_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.triangles);
+  glad_glBufferData(GL_ELEMENT_ARRAY_BUFFER, tris.size() * sizeof(u32), tris.data(),
+                    GL_STREAM_DRAW);
+  glad_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, strips);
+  s.converted = true;
+}
 }  // namespace
+
+void og_gles_buffer_data(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
+  glad_glBufferData(target, size, data, usage);
+  if (target == GL_ARRAY_BUFFER) {
+    g_array_usage[bound_buffer(GL_ARRAY_BUFFER_BINDING)] = usage;
+  } else if (target == GL_ELEMENT_ARRAY_BUFFER) {
+    const GLuint id = bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING);
+    if (usage == GL_STATIC_DRAW) {
+      g_strips.erase(id);  // static draws restart correctly: no need for a copy
+    } else {
+      auto& s = g_strips[id];
+      s.indices.resize(size / sizeof(u32));
+      if (data) {
+        memcpy(s.indices.data(), data, s.indices.size() * sizeof(u32));
+      }
+      s.converted = false;
+    }
+  }
+}
+
+void og_gles_buffer_sub_data(GLenum target, GLintptr offset, GLsizeiptr size, const void* data) {
+  glad_glBufferSubData(target, offset, size, data);
+  if (target == GL_ELEMENT_ARRAY_BUFFER) {
+    auto it = g_strips.find(bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING));
+    if (it != g_strips.end() && offset % sizeof(u32) == 0 &&
+        (size_t)(offset + size) <= it->second.indices.size() * sizeof(u32)) {
+      memcpy((u8*)it->second.indices.data() + offset, data, size);
+      it->second.converted = false;
+    }
+  }
+}
+
+void og_gles_delete_buffers(GLsizei n, const GLuint* buffers) {
+  for (GLsizei i = 0; i < n; i++) {
+    g_array_usage.erase(buffers[i]);
+    auto it = g_strips.find(buffers[i]);
+    if (it != g_strips.end()) {
+      if (it->second.triangles) {
+        glad_glDeleteBuffers(1, &it->second.triangles);
+      }
+      g_strips.erase(it);
+    }
+  }
+  glad_glDeleteBuffers(n, buffers);
+}
+
+void og_gles_draw_elements(GLenum mode, GLsizei count, GLenum type, const void* offset) {
+  if (mode == GL_TRIANGLE_STRIP && type == GL_UNSIGNED_INT && count > 0) {
+    GLint vertices = 0;
+    glad_glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &vertices);
+    auto usage = g_array_usage.find((GLuint)vertices);
+    const GLuint strips = bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING);
+    auto it = g_strips.find(strips);
+    const size_t first = (size_t)offset / sizeof(u32);
+    if (usage != g_array_usage.end() && usage->second != GL_STATIC_DRAW && it != g_strips.end() &&
+        first + count <= it->second.indices.size() &&
+        (first == 0 || it->second.indices[first - 1] == UINT32_MAX)) {
+      auto& s = it->second;
+      if (!s.converted) {
+        convert_strips(s);
+      }
+      const u32 begin = s.start[first], end = s.start[first + count];
+      glad_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.triangles);
+      glad_glDrawElements(GL_TRIANGLES, (GLsizei)(end - begin), GL_UNSIGNED_INT,
+                          (const void*)(size_t)(begin * sizeof(u32)));
+      glad_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, strips);
+      return;
+    }
+  }
+  glad_glDrawElements(mode, count, type, offset);
+}
 
 void og_gles_multi_draw_elements(GLenum mode,
                                  const GLsizei* count,
@@ -17,7 +143,7 @@ void og_gles_multi_draw_elements(GLenum mode,
                                  const void* const* indices,
                                  GLsizei drawcount) {
   for (GLsizei i = 0; i < drawcount; i++) {
-    glad_glDrawElements(mode, count[i], type, indices[i]);
+    og_gles_draw_elements(mode, count[i], type, indices[i]);
   }
 }
 

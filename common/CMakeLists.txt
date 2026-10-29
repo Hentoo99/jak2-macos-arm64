@@ -95,6 +95,7 @@ add_library(common
         util/os.cpp
         util/print_float.cpp
         util/read_iso_file.cpp
+        util/sha256.cpp
         util/SimpleThreadGroup.cpp
         util/string_util.cpp
         util/term_util.cpp

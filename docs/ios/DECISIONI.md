@@ -137,3 +137,53 @@ ed export bank per Jak 2. Primo traguardo: Jak 2 AOT su macOS senza `allow-jit`.
 
 Nota operativa: i run headless vanno lanciati con `--config-path <dir temporanea>`. Altrimenti
 `gk` riscrive `pc-settings.gc` dell'utente con la risoluzione di ripiego (320×240).
+
+---
+
+## Fase 2a — emitter di moduli firmati (2026-10-29)
+
+Componenti:
+- `goalc/aot/ObjectFileV3.*`: parser validato degli oggetti v3 ARM64.
+- `goalc/aot/SignedModuleEmitter.*` + `jak2-aot-emit`: genera `modules/*.S` (codice in
+  `__GOAL,__text`, template dei dati in `__TEXT,__const`), `arena-layout.S` (arena EE come
+  `__ARENA` zerofill da 256 MiB, con un'etichetta dati per segmento a offset fisso
+  da `0xa000000`), `module-index.c` (tabella per il loader, `common/aot/SignedModuleIndex.h`) e
+  `manifest.json` (link record solo-dati per il loader).
+- `common/util/sha256.*`: identità dei moduli.
+
+Come l'emitter tratta il codice:
+- Ogni coppia ADRP diventa `adrp/ldr|add …@PAGE/@PAGEOFF` verso l'etichetta dati del segmento.
+- Ogni type tag `function` diventa la costante passata con `--function-type`.
+- Rifiuta qualsiasi link che scriva nel codice e qualsiasi riferimento literal/ADR.
+
+Verifica: `scripts/aot_signed_roundtrip.sh` linka l'output in un eseguibile reale (ASLR attivo)
+e `test/aot/signed_module_roundtrip.cpp` confronta il testo linkato con gli oggetti originali.
+
+| Insieme | Moduli | Codice | Coppie ADRP | Regioni dati | Esito |
+|---|---|---|---|---|---|
+| Kernel | 8 | 311 KB | 2 220 | 15 | 0 errori |
+| Gioco intero | 841 | 48,9 MB | 318 281 | 2 108 | 0 errori, 17 s |
+
+- Il testo firmato finisce ad arena + 0x12ea4c90, quindi è raggiungibile con offset GOAL `u32`.
+  Il linker mette `__GOAL` subito dopo `__ARENA` se `arena-layout.o` precede i moduli.
+- Controprova: tre corruzioni volute dell'assembly (tag, istruzione, addendo ADRP) vengono
+  rilevate tutte e tre.
+- Test gtest: `Sha256.*`, `AotSignedModule.*`.
+
+### Nodi aperti per la fase 2b (loader runtime)
+
+1. **Tipo `function`.** È il quarto oggetto allocato nell'heap globale da `InitHeapAndSymbol`,
+   quindi deterministico per una data build del runtime. Il loader deve verificare
+   `FIX_SYM_FUNCTION_TYPE == goal_aot_function_type` prima di eseguire codice firmato.
+2. **Oggetti condivisi tra DGO.** 122 degli 840 oggetti stanno in più DGO, fino a 7: `bot`,
+   `hover-nav-*`, `crimson-guard-level`…
+   - Con una sola regione dati fissa per modulo, due livelli caricati insieme che contengono
+     lo stesso oggetto condividono i suoi statici.
+   - Proposta: conteggio dei riferimenti. Il template viene ricopiato solo al primo
+     caricamento attivo; al secondo i link vengono riapplicati e il top-level rieseguito, senza
+     azzerare i dati.
+   - Da validare in gioco. L'alternativa è duplicare le istanze di codice degli oggetti condivisi.
+3. **Bridge C→GOAL e mips2c.** Diventano export bank firmati, oggi trampolini JIT:
+   `make_function_from_c*` e `LinkedFunctionTable::reg`.
+4. **Integrazione.** Circa 49 MB di testo e 244 MB di assembly generato vanno compilati e
+   linkati in `gk` per un target macOS AOT, senza `allow-jit`.

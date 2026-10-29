@@ -1,5 +1,7 @@
 add_library(compiler
         aot/AotAssemblyWriter.cpp
+        aot/ObjectFileV3.cpp
+        aot/SignedModuleEmitter.cpp
         emitter/CallingConvention.cpp
         emitter/CodeTester.cpp
         emitter/ObjectFileData.cpp
@@ -80,6 +82,7 @@ endif ()
 add_executable(goalc main.cpp)
 add_executable(goalc-simple simple_main.cpp)
 add_executable(jak2-aot-generator aot/Jak2AotGenerator.cpp)
+add_executable(jak2-aot-emit aot/Jak2AotEmit.cpp)
 
 add_executable(build_level build_level/main.cpp)
 add_executable(build_actor build_actor/main.cpp)
@@ -87,5 +90,6 @@ add_executable(build_actor build_actor/main.cpp)
 target_link_libraries(goalc common Zydis compiler)
 target_link_libraries(goalc-simple common Zydis compiler)
 target_link_libraries(jak2-aot-generator common)
+target_link_libraries(jak2-aot-emit common compiler)
 target_link_libraries(build_level common Zydis compiler)
 target_link_libraries(build_actor common Zydis compiler)

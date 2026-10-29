@@ -147,9 +147,20 @@ echo "signed with $IDENTITY"
 xcrun devicectl device install app --device "$DEVICE" "$APP"
 if [ "${SKIP_DATA:-0}" != 1 ]; then
   [ -d out/ios-data/jak2 ] || scripts/make_jak2_ios_data_pack.sh
-  echo "copying the data pack (about 2.7 GB, a few minutes over USB)..."
-  xcrun devicectl device copy to --device "$DEVICE" --domain-type appDataContainer \
-    --domain-identifier "$BUNDLE_ID" --source out/ios-data/jak2 --destination Documents/jak2
+  echo "copying the data pack (about 2.7 GB)..."
+  # One folder at a time, with retries: a single 2.7 GB transfer drops the device connection.
+  for part in out/gles-shaders game/assets out/jak2-arm64/fr3 out/jak2-arm64/obj out/jak2-arm64/iso; do
+    for attempt in 1 2 3; do
+      if xcrun devicectl device copy to --device "$DEVICE" --domain-type appDataContainer \
+        --domain-identifier "$BUNDLE_ID" --source "out/ios-data/jak2/$part" \
+        --destination "Documents/jak2/$part" >/dev/null 2>&1; then
+        echo "  copied $part"
+        break
+      fi
+      [ "$attempt" = 3 ] && { echo "could not copy $part" >&2; exit 1; }
+      echo "  retrying $part"
+    done
+  done
 fi
 xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE_ID"
 echo "launched $BUNDLE_ID on $DEVICE"

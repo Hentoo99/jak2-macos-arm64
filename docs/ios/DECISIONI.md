@@ -238,9 +238,12 @@ firma ad-hoc `mmap(MAP_JIT)` RWX viene rifiutato, ma RW più `mprotect` RX è pe
 anche la build JIT gira (controprova fatta). L'ambiente vincolante sarà iOS; fino ad allora la
 prova è l'audit per interposizione.
 
+**Sessione con finestra sulla build AOT** (2026-10-29), fatta dall'utente: menu, Haven City,
+cambi di livello e missione; funziona.
+
 ### Nodi aperti
 
-1. **Oggetti condivisi tra DGO (122).** L'euristica attuale condivide gli statici quando un
+1. **Oggetti condivisi tra DGO (122).** Nella sessione utente non sono emersi problemi. L'euristica attuale condivide gli statici quando un
    modulo viene caricato in un heap diverso. Se un livello viene scaricato da uno slot e
    ricaricato in un altro, i suoi statici non vengono reimpostati. Va verificato in gioco, con
    sessioni lunghe.

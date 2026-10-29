@@ -1,7 +1,5 @@
 #include "mips2c_table.h"
 
-#include "common/aot/AotExecution.h"
-#include "common/aot/AotFunction.h"
 #include "common/goal_constants.h"
 #include "common/jit_memory.h"
 #include "common/log/log.h"
@@ -11,6 +9,7 @@
 #include "game/kernel/common/arm64_trampoline.h"
 #include "game/kernel/common/kmalloc.h"
 #include "game/kernel/common/kscheme.h"
+#include "game/kernel/common/signed_aot.h"
 #include "game/kernel/jak2/kscheme.h"
 #include "game/mips2c/mips2c_private.h"
 #include "game/runtime.h"
@@ -274,37 +273,18 @@ PerGameVersion<std::unordered_map<std::string, std::vector<void (*)()>>> gMips2C
     {},
 };
 
-#if OG_EXECUTION_MODE_AOT
-static u64 invoke_aot_mips2c(goal_aot::GoalCallContext* context) {
-  using Mips2cFunction = u64 (*)(void*);
-  Mips2C::ExecutionContext execution{};
-  for (u32 i = 0; i < context->args.size(); ++i) {
-    execution.gprs[i].du64[0] = context->args[i];
-  }
-  execution.gprs[Mips2C::s6].du64[0] = context->process_pointer;
-  execution.gprs[Mips2C::s7].du64[0] = context->ee_base;
-  execution.gprs[Mips2C::sp].du64[0] = context->goal_stack_pointer;
-  return reinterpret_cast<Mips2cFunction>(context->native_target)(&execution);
-}
-#endif
-
 void LinkedFunctionTable::reg(const std::string& name, u64 (*exec)(void*), u32 stack_size) {
 #if OG_EXECUTION_MODE_AOT
-  const auto id = goal_aot::register_native_bridge(
-      reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(&invoke_aot_mips2c)),
-      goal_aot::kMips2c, name,
-      reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(exec)));
-  auto descriptor = Ptr<u8>(::jak2::alloc_heap_object(
-      ::s7.offset + jak2_symbols::FIX_SYM_GLOBAL_HEAP,
-      ::jak2::u32_in_fixed_sym(jak2_symbols::FIX_SYM_FUNCTION_TYPE),
-      sizeof(goal_aot::FunctionDescriptor), UNKNOWN_PP));
-  *reinterpret_cast<goal_aot::FunctionDescriptor*>(descriptor.c()) =
-      goal_aot::make_descriptor(id, 1, goal_aot::kMips2c);
-  const auto it = m_executes.insert({name, {exec, descriptor}});
+  // A signed stub loads {exec, stack_size} from its slot and enters _mips2c_call_arm64.
+  const auto it = m_executes.insert({name, {exec, Ptr<u8>()}});
   if (!it.second) {
     lg::error("MIPS2C Function {} is registered multiple times, ignoring later registrations.",
               name);
+    return;
   }
+  it.first->second.goal_trampoline = Ptr<u8>(signed_aot::bind_export(
+      GOAL_AOT_BANK_MIPS2C, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(exec)),
+      stack_size));
   return;
 #else
 #if defined(__aarch64__)

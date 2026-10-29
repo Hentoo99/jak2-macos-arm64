@@ -187,3 +187,64 @@ e `test/aot/signed_module_roundtrip.cpp` confronta il testo linkato con gli ogge
    `make_function_from_c*` e `LinkedFunctionTable::reg`.
 4. **Integrazione.** Circa 49 MB di testo e 244 MB di assembly generato vanno compilati e
    linkati in `gk` per un target macOS AOT, senza `allow-jit`.
+
+---
+
+## Fase 2b — Jak 2 AOT su macOS senza JIT (2026-10-29)
+
+`scripts/build_jak2_aot_macos.sh` produce `build-arm64-aot/game/gk.app`. La configurazione è
+`OPENGOAL_EXECUTION_MODE=AOT` con `OPENGL`, e l'immagine generata sta in `out/aot/jak2/macos-arm64`.
+
+### Cosa cambia nel runtime (solo con `OG_EXECUTION_MODE_AOT`)
+
+- **Memoria EE.** È il segmento `__ARENA` dell'eseguibile (`runtime.cpp`). È zerofill, quindi
+  non viene azzerata con `memset`.
+- **`call_goal`.** Salta direttamente alla funzione firmata, come in modalità dinamica. Il
+  dispatch dei descrittori `AOTF` non è più usato (ADR-IOS-001).
+- **Bridge C→GOAL e mips2c.** Usano stub firmati presi dagli export bank (`export-banks.S`
+  generato da `jak2-aot-emit`):
+  - `make_function_from_c*` e `LinkedFunctionTable::reg` passano da `signed_aot::bind_export`;
+  - `nothing`/`zero` usano stub fissi.
+- **Loader `link_control::jak2_work_v3_signed`** (`jak2/klink.cpp`):
+  - trova il modulo per nome;
+  - verifica lo SHA-256 dell'oggetto, ripristinando il magic "GOAL" che `jak2_work`
+    sovrascrive con il tag del link block;
+  - copia i template nell'arena e applica i link solo come dati.
+
+  La modalità dei link dei simboli viene letta dal template, non dall'arena. I dati statici
+  vengono reimpostati, a meno che il modulo sia vivo in un altro heap (vedi "Nodi aperti").
+- **Tipo `function`.** In AOT `InitSymbolTableAndBaseTypes` gira prima di `init_output`, che
+  mette i suoi buffer nell'heap globale solo senza debug. Così il tipo sta a **0x16fde4** in
+  ogni modalità di boot. Una discrepanza è un errore fatale che indica il valore giusto.
+- **`END_OF_MEMORY`.** Vale 0x40000000 su ARM64, sia in GOAL (`gcommon.gc`) sia in C
+  (`memory_layout.h`, usato da print/inspect/controlli sui tipi). Statici e codice firmato
+  stanno sopra i 128 MiB.
+
+### Verifica (headless, configurazione separata)
+
+| Prova | Esito |
+|---|---|
+| Boot senza `-debug`, 60 s | titolo e 4 livelli (title, ctywide, lwidea, ctysluma); log identico al JIT |
+| Boot con `-debug`, 60 s | prison, ldjakbrn, forexita; identico al JIT nella stessa modalità |
+| `mmap(MAP_JIT)` / `mmap(PROT_EXEC)` / `mprotect(PROT_EXEC)` | **0 / 0 / 0** in AOT; controprova JIT: 1 / 0 / 1183 |
+| `scripts/aot_signed_roundtrip.sh` | 840 moduli + 704 stub, 0 errori |
+| Test di regressione (build JIT) | 221 verdi |
+
+I conteggi di memoria eseguibile vengono da un'interposizione di `mmap`/`mprotect` con
+`DYLD_INSERT_LIBRARIES`.
+
+Nota: firmare con il runtime rafforzato senza `allow-jit` **non** prova niente su macOS. Con
+firma ad-hoc `mmap(MAP_JIT)` RWX viene rifiutato, ma RW più `mprotect` RX è permesso, tanto che
+anche la build JIT gira (controprova fatta). L'ambiente vincolante sarà iOS; fino ad allora la
+prova è l'audit per interposizione.
+
+### Nodi aperti
+
+1. **Oggetti condivisi tra DGO (122).** L'euristica attuale condivide gli statici quando un
+   modulo viene caricato in un heap diverso. Se un livello viene scaricato da uno slot e
+   ricaricato in un altro, i suoi statici non vengono reimpostati. Va verificato in gioco, con
+   sessioni lunghe.
+2. **REPL/listener.** In AOT il codice inviato da goalc viene rifiutato perché non ha un modulo
+   firmato. È voluto.
+3. **Prossimo passo.** Target iOS (ANGLE/GLES, shell, pack dati), dove il divieto di JIT è
+   imposto dal sistema.

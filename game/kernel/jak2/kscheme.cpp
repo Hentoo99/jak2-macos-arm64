@@ -6,8 +6,6 @@
 
 #include "fileio.h"
 
-#include "common/aot/AotExecution.h"
-#include "common/aot/AotFunction.h"
 #include "common/common_types.h"
 #include "common/global_profiler/GlobalProfiler.h"
 #include "common/goal_constants.h"
@@ -22,6 +20,8 @@
 #include "game/kernel/common/klink.h"
 #include "game/kernel/common/kmemcard.h"
 #include "game/kernel/common/kprint.h"
+#include "game/kernel/common/memory_layout.h"
+#include "game/kernel/common/signed_aot.h"
 #include "game/kernel/jak2/kdgo.h"
 #include "game/kernel/jak2/klink.h"
 #include "game/kernel/jak2/klisten.h"
@@ -321,14 +321,8 @@ void _stack_call_arm64();
  */
 Ptr<Function> make_function_from_c_systemv(void* func, bool arg3_is_pp) {
 #if OG_EXECUTION_MODE_AOT
-  const auto flags = arg3_is_pp ? goal_aot::kAcceptsProcessPointer : goal_aot::kNone;
-  const auto id = goal_aot::register_native_bridge(func, flags, "c-bridge");
-  auto mem = Ptr<u8>(alloc_heap_object(s7.offset + FIX_SYM_GLOBAL_HEAP,
-                                       u32_in_fixed_sym(FIX_SYM_FUNCTION_TYPE),
-                                       sizeof(goal_aot::FunctionDescriptor), UNKNOWN_PP));
-  *reinterpret_cast<goal_aot::FunctionDescriptor*>(mem.c()) =
-      goal_aot::make_descriptor(id, 1, flags);
-  return mem.cast<Function>();
+  return Ptr<Function>(
+      signed_aot::bind_export(arg3_is_pp ? GOAL_AOT_BANK_ARG_PP : GOAL_AOT_BANK_ARG, func));
 #else
 #if defined(__aarch64__)
   if (g_ee_main_mem && kglobalheap.offset) {
@@ -452,14 +446,7 @@ Ptr<Function> make_function_from_c_win32(void* func, bool arg3_is_pp) {
 
 Ptr<Function> make_stack_arg_function_from_c_systemv(void* func) {
 #if OG_EXECUTION_MODE_AOT
-  constexpr auto flags = goal_aot::kUsesGoalStack;
-  const auto id = goal_aot::register_native_bridge(func, flags, "stack-c-bridge");
-  auto mem = Ptr<u8>(alloc_heap_object(s7.offset + FIX_SYM_GLOBAL_HEAP,
-                                       u32_in_fixed_sym(FIX_SYM_FUNCTION_TYPE),
-                                       sizeof(goal_aot::FunctionDescriptor), UNKNOWN_PP));
-  *reinterpret_cast<goal_aot::FunctionDescriptor*>(mem.c()) =
-      goal_aot::make_descriptor(id, 1, flags);
-  return mem.cast<Function>();
+  return Ptr<Function>(signed_aot::bind_export(GOAL_AOT_BANK_STACK, func));
 #else
 #if defined(__aarch64__)
   if (g_ee_main_mem && kglobalheap.offset) {
@@ -584,11 +571,7 @@ Ptr<Function> make_stack_arg_function_from_c(void* func) {
  */
 Ptr<Function> make_nothing_func() {
 #if OG_EXECUTION_MODE_AOT
-  return make_function_from_c_systemv(reinterpret_cast<void*>(+[](uint64_t, uint64_t, uint64_t,
-                                                                  uint64_t, uint64_t, uint64_t,
-                                                                  uint64_t, uint64_t) -> uint64_t {
-    return 0;
-  }), false);
+  return Ptr<Function>(signed_aot::nothing_function());
 #else
 #if defined(__aarch64__)
   if (g_ee_main_mem && kglobalheap.offset) {
@@ -617,11 +600,7 @@ Ptr<Function> make_nothing_func() {
  */
 Ptr<Function> make_zero_func() {
 #if OG_EXECUTION_MODE_AOT
-  return make_function_from_c_systemv(reinterpret_cast<void*>(+[](uint64_t, uint64_t, uint64_t,
-                                                                  uint64_t, uint64_t, uint64_t,
-                                                                  uint64_t, uint64_t) -> uint64_t {
-    return 0;
-  }), false);
+  return Ptr<Function>(signed_aot::zero_function());
 #else
 #if defined(__aarch64__)
   if (g_ee_main_mem && kglobalheap.offset) {
@@ -1016,7 +995,7 @@ Ptr<Type> set_fixed_type(u32 offset,
 }
 
 static bool in_valid_memory_for_new_type(u32 addr) {
-  if (SymbolTable2.offset <= addr && addr < 0x8000000) {
+  if (SymbolTable2.offset <= addr && addr < END_OF_MEMORY) {
     return true;
   }
 
@@ -1174,9 +1153,10 @@ u64 method_set(u32 type_, u32 method_id, u32 method) {
  * Call a GOAL method of a given type.
  */
 u64 call_method_of_type(u32 arg, Ptr<Type> type, u32 method_id) {
-  if (((type.offset < SymbolTable2.offset || 0x7ffffff < type.offset) &&  // not in normal memory
-       (type.offset < 0x84000 || 0x100000 <= type.offset))                // not in kernel memory
-      || ((type.offset & OFFSET_MASK) != BASIC_OFFSET)) {                 // invalid type
+  if (((type.offset < SymbolTable2.offset ||
+        END_OF_MEMORY <= type.offset) &&                    // not in normal memory
+       (type.offset < 0x84000 || 0x100000 <= type.offset))  // not in kernel memory
+      || ((type.offset & OFFSET_MASK) != BASIC_OFFSET)) {   // invalid type
     cprintf("#<#%x has invalid type ptr #x%x>\n", arg, type.offset);
   } else {
     auto type_tag = Ptr<Ptr<Type>>(type.offset - 4);
@@ -1210,9 +1190,10 @@ u64 call_goal_function_by_name(const char* name) {
  * Like call_method_of_type, but has two arguments. Used to "relocate" v2/s4 loads.
  */
 u64 call_method_of_type_arg2(u32 arg, Ptr<Type> type, u32 method_id, u32 a1, u32 a2) {
-  if (((type.offset < SymbolTable2.offset || 0x7ffffff < type.offset) &&  // not in normal memory
-       (type.offset < 0x84000 || 0x100000 <= type.offset))                // not in kernel memory
-      || ((type.offset & OFFSET_MASK) != BASIC_OFFSET)) {                 // invalid type
+  if (((type.offset < SymbolTable2.offset ||
+        END_OF_MEMORY <= type.offset) &&                    // not in normal memory
+       (type.offset < 0x84000 || 0x100000 <= type.offset))  // not in kernel memory
+      || ((type.offset & OFFSET_MASK) != BASIC_OFFSET)) {   // invalid type
     cprintf("#<#%x has invalid type ptr #x%x>\n", arg, type.offset);
   } else {
     auto type_tag = Ptr<Ptr<Type>>(type.offset - 4);
@@ -1250,8 +1231,8 @@ u64 print_object(u32 obj) {
   if ((obj & OFFSET_MASK) == BINTEGER_OFFSET) {
     return print_binteger(s64(s32(obj)));
   } else {
-    if ((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-        (obj < 0x84000 || 0x100000 <= obj)) {              // not in kernel memory
+    if ((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+        (obj < 0x84000 || 0x100000 <= obj)) {                   // not in kernel memory
       cprintf("#<invalid object #x%x>", obj);
     } else if ((obj & OFFSET_MASK) == PAIR_OFFSET) {
       return print_pair(obj);
@@ -1272,8 +1253,8 @@ u64 print_object(u32 obj) {
  * Confirms basic is valid and prints the type name.
  */
 u64 print_basic(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & OFFSET_MASK) != BASIC_OFFSET)) {
     cprintf("#<invalid basic #x%x>", obj);
   } else {
@@ -1334,8 +1315,8 @@ u64 print_pair(u32 obj) {
  * Print method for symbol.  Just prints the name without quotes or anything fancy.
  */
 u64 print_symbol(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & 1) != 1) || obj < SymbolTable2.offset || obj >= LastSymbol.offset) {
     cprintf("#<invalid symbol #x%x>", obj);
   } else {
@@ -1349,8 +1330,8 @@ u64 print_symbol(u32 obj) {
  * Print method for type.  Just prints the name without quotes
  */
 u64 print_type(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & OFFSET_MASK) != BASIC_OFFSET) ||
       *Ptr<u32>(obj - 4) != u32_in_fixed_sym(FIX_SYM_TYPE_TYPE)) {
     cprintf("#<invalid type #x%x>", obj);
@@ -1364,8 +1345,8 @@ u64 print_type(u32 obj) {
  * Print method for string.  Prints the string in quotes.
  */
 u64 print_string(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & OFFSET_MASK) != BASIC_OFFSET) ||
       *Ptr<u32>(obj - 4) != u32_in_fixed_sym(FIX_SYM_STRING_TYPE)) {
     if (obj == s7.offset) {
@@ -1432,8 +1413,8 @@ u64 inspect_object(u32 obj) {
   if ((obj & OFFSET_MASK) == BINTEGER_OFFSET) {
     return inspect_binteger(obj);
   } else {
-    if ((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-        (obj < 0x84000 || 0x100000 <= obj)) {              // not in kernel memory
+    if ((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+        (obj < 0x84000 || 0x100000 <= obj)) {                   // not in kernel memory
       cprintf("#<invalid object #x%x>", obj);
     } else if ((obj & OFFSET_MASK) == PAIR_OFFSET) {
       return inspect_pair(obj);
@@ -1465,8 +1446,8 @@ u64 inspect_pair(u32 obj) {
  * This typo is fixed in later games.
  */
 u64 inspect_string(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & OFFSET_MASK) != BASIC_OFFSET) ||
       *Ptr<u32>(obj - 4) != u32_in_fixed_sym(FIX_SYM_STRING_TYPE)) {
     cprintf("#<invalid string #x%x>\n", obj);
@@ -1481,8 +1462,8 @@ u64 inspect_string(u32 obj) {
  * Inspect a symbol.
  */
 u64 inspect_symbol(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & 1) != 1) || obj < SymbolTable2.offset || obj >= LastSymbol.offset) {
     cprintf("#<invalid symbol #x%x>", obj);
   } else {
@@ -1499,8 +1480,8 @@ u64 inspect_symbol(u32 obj) {
  * Inspect a type.
  */
 u64 inspect_type(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & OFFSET_MASK) != BASIC_OFFSET) ||
       *Ptr<u32>(obj - 4) != u32_in_fixed_sym(FIX_SYM_TYPE_TYPE)) {
     cprintf("#<invalid type #x%x>\n", obj);
@@ -1525,8 +1506,8 @@ u64 inspect_type(u32 obj) {
  * We just use print_object.
  */
 u64 inspect_basic(u32 obj) {
-  if (((obj < SymbolTable2.offset || 0x7ffffff < obj) &&  // not in normal memory
-       (obj < 0x84000 || 0x100000 <= obj))                // not in kernel memory
+  if (((obj < SymbolTable2.offset || END_OF_MEMORY <= obj) &&  // not in normal memory
+       (obj < 0x84000 || 0x100000 <= obj))                     // not in kernel memory
       || ((obj & OFFSET_MASK) != BASIC_OFFSET)) {
     if (obj == s7.offset) {
       // added in jak2
@@ -1569,7 +1550,18 @@ u64 pack_type_flag(u64 methods, u64 heap_base, u64 size) {
 }
 }  // namespace
 
-int InitHeapAndSymbol() {
+/*!
+ * Allocate the symbol table and the types needed to create symbols.
+ * Called by InitHeapAndSymbol; signed AOT builds call it earlier (see InitMachine), so that the
+ * "function" type lands at the same address whatever the boot flags allocate afterwards.
+ */
+void InitSymbolTableAndBaseTypes() {
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+
   // allocate memory for all 3 tables
   Ptr<u32> symbol_table =
       kmalloc(kglobalheap, jak2::SYM_TABLE_MEM_SIZE, KMALLOC_MEMSET, "symbol-table").cast<u32>();
@@ -1578,9 +1570,6 @@ int InitHeapAndSymbol() {
   SymbolTable2 = symbol_table + 5;
   s7 = symbol_table + 0x8001;
   NumSymbols = 0;
-
-  // inform compiler of s7
-  reset_output();
 
   // empty pair (this is extra confusing).
   *Ptr<u32>(s7.offset + FIX_SYM_EMPTY_CAR - 1) = s7.offset + S7_OFF_FIX_SYM_EMPTY_PAIR;
@@ -1594,6 +1583,17 @@ int InitHeapAndSymbol() {
   alloc_and_init_type((s7 + FIX_SYM_SYMBOL_TYPE).cast<Symbol4<Ptr<Type>>>(), 9, true);
   alloc_and_init_type((s7 + FIX_SYM_STRING_TYPE).cast<Symbol4<Ptr<Type>>>(), 9, true);
   alloc_and_init_type((s7 + FIX_SYM_FUNCTION_TYPE).cast<Symbol4<Ptr<Type>>>(), 9, true);
+#if OG_EXECUTION_MODE_AOT
+  // Every signed GOAL function carries this type's address as a constant tag.
+  signed_aot::verify_function_type(u32_in_fixed_sym(FIX_SYM_FUNCTION_TYPE));
+#endif
+}
+
+int InitHeapAndSymbol() {
+  InitSymbolTableAndBaseTypes();
+
+  // inform compiler of s7
+  reset_output();
 
   // set up symbols!
   set_fixed_symbol(FIX_SYM_FALSE, "#f", s7.offset + FIX_SYM_FALSE);

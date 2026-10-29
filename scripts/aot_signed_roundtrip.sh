@@ -27,11 +27,12 @@ fi
 
 mkdir -p "$WORK/obj"
 clang -c -arch arm64 "$WORK/emit/arena-layout.S" -o "$WORK/obj/arena-layout.o"
+clang -c -arch arm64 "$WORK/emit/export-banks.S" -o "$WORK/obj/export-banks.o"
 ls "$WORK/emit/modules/"*.S | xargs -P "$(sysctl -n hw.ncpu)" -I{} sh -c \
   'clang -c -arch arm64 "$1" -o "$2/obj/$(basename "$1" .S).o"' _ {} "$WORK"
 clang -c -arch arm64 -I"$ROOT" "$WORK/emit/module-index.c" -o "$WORK/obj/module-index.o"
 clang++ -std=c++20 -O1 -arch arm64 -I"$ROOT" "$ROOT/test/aot/signed_module_roundtrip.cpp" \
-  "$WORK/obj/arena-layout.o" "$WORK/obj/module-index.o" \
+  "$WORK/obj/arena-layout.o" "$WORK/obj/export-banks.o" "$WORK/obj/module-index.o" \
   $(ls "$WORK/obj/"goal_*.o) \
   -Wl,-segprot,__ARENA,rw,rw -Wl,-segprot,__GOAL,rx,rx \
   -o "$WORK/roundtrip"

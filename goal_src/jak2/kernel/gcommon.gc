@@ -43,7 +43,9 @@
   )
 
 ;; pointers larger than this are invalid by valid?
-(defconstant END_OF_MEMORY #x8000000)
+;; ARM64: the debug heap ends at #x9f00000 and signed AOT code is linked after the 256 MiB EE
+;; arena (docs/ios/DECISIONI.md), so allow the whole first GiB of GOAL offsets.
+(defconstant END_OF_MEMORY (#if ARM64_TARGET #x40000000 #x8000000))
 
 (defun identity ((arg0 object))
   "Return the input. Works for any 64-bit value."

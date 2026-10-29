@@ -24,6 +24,11 @@
 
 #include "common/aot/SignedModuleIndex.h"
 
+// The export banks branch to the runtime's C bridges; this test only reads them.
+asm(".globl _arg_call_arm64\n_arg_call_arm64: ret\n"
+    ".globl _stack_call_arm64\n_stack_call_arm64: ret\n"
+    ".globl _mips2c_call_arm64\n_mips2c_call_arm64: ret\n");
+
 namespace {
 
 constexpr uint32_t kTagPlaceholder = 0xaeaeaeae;
@@ -172,6 +177,28 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Export banks: every stub is tagged and its ADRP pair reaches its own slot.
+  uint32_t stubs = 0;
+  for (int kind = 0; kind < GOAL_AOT_BANK_COUNT; kind++) {
+    const goal_aot_export_bank& bank = goal_aot_export_banks[kind];
+    for (uint32_t i = 0; i < bank.count; i++, stubs++) {
+      const uint8_t* stub = bank.stubs + (size_t)i * bank.stride;
+      if (u32_at(stub) != goal_aot_function_type) {
+        error("bank %d stub %u: bad type tag", kind, i);
+      }
+      const uint64_t got = pair_target((uint64_t)(stub + 4), u32_at(stub + 4), u32_at(stub + 8));
+      if (got != (uint64_t)(bank.slots + 2 * i)) {
+        error("bank %d stub %u: slot address %#llx, expected %p", kind, i, (unsigned long long)got,
+              (void*)(bank.slots + 2 * i));
+      }
+      max_text_end = std::max(max_text_end, (uint64_t)stub + bank.stride);
+    }
+  }
+  if (u32_at(goal_aot_nothing_stub) != goal_aot_function_type ||
+      u32_at(goal_aot_zero_stub) != goal_aot_function_type) {
+    error("%s", "nothing/zero stub: bad type tag");
+  }
+
   std::sort(regions.begin(), regions.end(),
             [](const Region& a, const Region& b) { return a.begin < b.begin; });
   for (size_t i = 0; i < regions.size(); i++) {
@@ -187,6 +214,7 @@ int main(int argc, char** argv) {
           (long long)(max_text_end - arena));
   }
 
+  std::printf("%u export stubs checked\n", stubs);
   std::printf(
       "%u modules, %llu bytes of code, %llu ADRP pairs, %zu data regions; "
       "text ends at arena+%#llx: %s (%d errors)\n",

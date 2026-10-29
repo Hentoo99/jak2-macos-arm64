@@ -7,6 +7,7 @@
 
 #include "common/global_profiler/GlobalProfiler.h"
 #include "common/log/log.h"
+#include "common/platform/BuildConfig.h"
 #include "common/symbols.h"
 #include "common/util/FileUtil.h"
 #include "common/util/font/font_utils.h"
@@ -382,6 +383,10 @@ int InitMachine() {
 
   kmemopen_from_c(kglobalheap, "global");
   kmemopen_from_c(kglobalheap, "scheme-globals");
+#if OG_EXECUTION_MODE_AOT
+  // Before init_output, whose buffers go to the global heap only without debug.
+  InitSymbolTableAndBaseTypes();
+#endif
   if (!MasterDebug && !DebugSegment) {
     // if no debug, we make the kheapinfo structure NULL so GOAL knows not to use it.
     // note: either MasterDebug or DebugSegment is enough to give use the debug heap.

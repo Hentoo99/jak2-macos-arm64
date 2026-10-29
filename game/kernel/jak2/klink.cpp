@@ -1,5 +1,8 @@
 #include "klink.h"
 
+#include <cstdio>
+#include <string>
+
 #include "common/goal_constants.h"
 #include "common/jit_memory.h"
 #include "common/log/log.h"
@@ -12,6 +15,7 @@
 #include "game/kernel/common/kprint.h"
 #include "game/kernel/common/kscheme.h"
 #include "game/kernel/common/memory_layout.h"
+#include "game/kernel/common/signed_aot.h"
 #include "game/kernel/jak2/kscheme.h"
 #include "game/mips2c/mips2c_table.h"
 
@@ -193,11 +197,202 @@ uint32_t symlink_v3(Ptr<uint8_t> link, Ptr<uint8_t> data) {
 }
 }  // namespace
 
+#if OG_EXECUTION_MODE_AOT
+namespace {
+/*!
+ * Link a v3 object whose code is signed into the executable (signed_aot.h).
+ *
+ * The object only supplies data: after its SHA-256 is checked against the signed module, each
+ * segment's static template is copied to the module's fixed arena region and the link table is
+ * applied to it.  Segment offsets below the code size refer to the signed text and above it to
+ * the arena data.  Nothing is written to, or allocated for, code.
+ */
+class SignedObjectLinker {
+ public:
+  SignedObjectLinker(const goal_aot_module& mod, ObjectFileHeader* ofh, Ptr<u8> link_block)
+      : m_mod(mod), m_ofh(ofh), m_link_block(link_block) {}
+
+  void link_segment(int seg) {
+    Ptr<u8> lp(m_link_block.offset + m_ofh->link_infos[seg].offset);
+    while (*lp) {
+      const u8 kind = *lp;
+      lp = lp + 1;
+      switch (kind) {
+        case LINK_SYMBOL_OFFSET:
+          lp = lp + symbol_links(lp, seg);
+          break;
+        case LINK_TYPE_PTR:
+          lp = lp + type_links(lp, seg);
+          break;
+        case LINK_PTR: {
+          const u32* link = lp.cast<u32>().c();
+          *Ptr<u32>(data_address(seg, link[0], "pointer link")).c() = address(seg, link[1]);
+          lp = lp + 8;
+        } break;
+        case LINK_DISTANCE_TO_OTHER_SEG_64: {
+          const u8 target = *lp;
+          const u32* link = (lp + 1).cast<u32>().c();
+          const s64 mine = address(seg, link[0]);
+          // Same rule as cross_seg_dist_link_v3: a missing target segment resolves to GOAL 0.
+          const bool target_missing =
+              target >= N_SEG || !present(target) || (!DebugSegment && target == DEBUG_SEGMENT);
+          const s64 diff = target_missing ? -mine : (s64)address(target, link[1]) - mine;
+          memcpy(Ptr<u8>(data_address(seg, link[2], "distance link", 8)).c(), &diff, 8);
+          lp = lp + 13;
+        } break;
+        default:
+          signed_aot::fatal("unsupported link record in signed object %s", m_mod.name);
+      }
+    }
+  }
+
+  bool present(int seg) const { return m_ofh->code_infos[seg].offset != 0; }
+
+ private:
+  static std::string read_name(Ptr<u8>& lp) {
+    std::string name;
+    while (*lp) {
+      name.push_back((char)*lp);
+      lp = lp + 1;
+    }
+    lp = lp + 1;
+    return name;
+  }
+
+  u32 address(int seg, u32 offset) const {
+    const auto& s = m_mod.segments[seg];
+    if (offset < s.code_size) {
+      return signed_aot::goal_offset(s.text + offset);
+    }
+    return signed_aot::goal_offset(s.data) + (offset - s.code_size);
+  }
+
+  u32 data_address(int seg, u32 offset, const char* what, u32 width = 4) const {
+    const auto& s = m_mod.segments[seg];
+    if (offset < s.code_size || offset - s.code_size + width > s.static_size) {
+      std::fprintf(stderr, "[signed-aot] %s: %s at %#x is outside the static data\n", m_mod.name,
+                   what, offset);
+      signed_aot::fatal("signed object %s writes outside its data", m_mod.name);
+    }
+    return address(seg, offset);
+  }
+
+  u32 symbol_links(Ptr<u8> lp, int seg) {
+    const auto start = lp.offset;
+    const auto name = read_name(lp);
+    auto sym = jak2::intern_from_c(name.c_str());
+    const s32 sym_offset = sym.cast<u32>() - s7;
+    const u32 count = *lp.cast<u32>();
+    lp = lp + 4;
+    const auto& s = m_mod.segments[seg];
+    for (u32 i = 0; i < count; i++) {
+      const u32 offset = lp.cast<u32>().c()[i];
+      const u32 dest = data_address(seg, offset, "symbol link");
+      // The kind of link is encoded in the unlinked value, so read it from the template: the arena
+      // copy already holds a linked value when a live module is linked again.
+      u32 encoded;
+      memcpy(&encoded, s.data_template + (offset - s.code_size), 4);
+      s32 value = sym_offset;
+      if (encoded == 0xFFFFFFFFu) {
+        value = (s32)sym.offset;
+      } else if (encoded == LINK_SYM_NO_OFFSET_FLAG) {
+        value = sym_offset - 1;
+      }
+      *Ptr<s32>(dest).c() = value;
+    }
+    lp = lp + 4 * count;
+    return lp.offset - start;
+  }
+
+  u32 type_links(Ptr<u8> lp, int seg) {
+    const auto start = lp.offset;
+    const auto name = read_name(lp);
+    u32 method_count = *lp;
+    lp = lp + 1;
+    method_count *= 4;  // jak2 objects store (methods / 4); see typelink_v3
+    if (method_count) {
+      method_count += 3;
+    }
+    auto type_ptr = jak2::intern_type_from_c(name.c_str(), method_count);
+    const u32 count = *lp.cast<u32>();
+    lp = lp + 4;
+    const auto& s = m_mod.segments[seg];
+    for (u32 i = 0; i < count; i++) {
+      const u32 offset = lp.cast<u32>().c()[i];
+      if (offset < s.code_size) {
+        // A function type tag: emitted as a constant in the signed text, which
+        // verify_function_type checked against this type at boot.
+        if (name != "function") {
+          signed_aot::fatal("signed object %s links a non-function type into code", m_mod.name);
+        }
+        continue;
+      }
+      *Ptr<u32>(data_address(seg, offset, "type link")).c() = type_ptr.offset;
+    }
+    lp = lp + 4 * count;
+    return lp.offset - start;
+  }
+
+  const goal_aot_module& m_mod;
+  ObjectFileHeader* m_ofh;
+  Ptr<u8> m_link_block;
+};
+}  // namespace
+
+LinkStatus link_control::jak2_work_v3_signed() {
+  ObjectFileHeader* ofh = m_link_block_ptr.cast<ObjectFileHeader>().c();
+  const goal_aot_module* mod = signed_aot::find_module(m_object_name);
+  if (!mod) {
+    signed_aot::fatal("object %s contains code but has no signed module", m_object_name);
+  }
+  signed_aot::verify_module_object(*mod, m_code_start.c(), (u32)m_object_size);
+
+  // Static data is reset unless another live instance may still use it: a module loaded again into
+  // the heap it last used replaces that instance, but a load into a different heap (another level
+  // slot) shares the data of the instance there.
+  auto& state = signed_aot::module_state(*mod);
+  const bool reset_data = !state.loaded || state.heap == m_heap.offset;
+  if (!reset_data) {
+    lg::debug("signed-aot: {} shares static data with a live instance", mod->name);
+  }
+
+  for (int seg = 0; seg < N_SEG; seg++) {
+    const auto& s = mod->segments[seg];
+    if (!ofh->code_infos[seg].size || (seg == DEBUG_SEGMENT && !DebugSegment)) {
+      ofh->code_infos[seg].offset = 0;
+      continue;
+    }
+    if (reset_data && s.static_size) {
+      memcpy(s.data, s.data_template, s.static_size);
+    }
+    // The segment base seen by GOAL is its signed code (the entry point is the top-level code).
+    ofh->code_infos[seg].offset =
+        signed_aot::goal_offset(s.code_size ? (const void*)s.text : (const void*)s.data);
+  }
+
+  SignedObjectLinker linker(*mod, ofh, m_link_block_ptr);
+  for (int seg = 0; seg < N_SEG; seg++) {
+    if (linker.present(seg)) {
+      linker.link_segment(seg);
+    }
+  }
+
+  state.loaded = true;
+  state.heap = m_heap.offset;
+  state.loads++;
+  m_entry = Ptr<u8>(ofh->code_infos[TOP_LEVEL_SEGMENT].offset) + 4;
+  return LinkStatus::Complete;
+}
+#endif
+
 /*!
  * Run the linker. For now, all linking is done in two runs.  If this turns out to be too slow,
  * this should be modified to do incremental linking over multiple runs.
  */
 LinkStatus link_control::jak2_work_v3() {
+#if OG_EXECUTION_MODE_AOT
+  return jak2_work_v3_signed();
+#endif
   ObjectFileHeader* ofh = m_link_block_ptr.cast<ObjectFileHeader>().c();
   if (m_state == 0) {
     // state 0 <- copying data.
@@ -566,9 +761,8 @@ void link_control::jak2_finish(bool jump_from_c_to_goal) {
         }
 #endif
         if (executable_size) {
-#if OG_EXECUTION_MODE_AOT
-          throw std::runtime_error("AOT object contains an executable code segment");
-#else
+#if !OG_EXECUTION_MODE_AOT
+          // Signed AOT code is already executable in the __GOAL segment.
           jit_memory::make_executable(Ptr<u8>(code.offset).c(), executable_size);
 #endif
         }

@@ -105,6 +105,7 @@ struct link_control {
   uint32_t jak1_work_v2();
 
   LinkStatus jak2_work_v3();
+  LinkStatus jak2_work_v3_signed();  // OG_EXECUTION_MODE_AOT only
   LinkStatus jak2_work_v2();
 
   uint32_t jak3_work_v2_v4();

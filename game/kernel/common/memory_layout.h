@@ -25,6 +25,15 @@ constexpr u32 GLOBAL_HEAP_END = 0x6ffc000;
 constexpr u32 GLOBAL_HEAP_END = 0x1ffc000 + (BIG_MEMORY ? (0x1ffc000 - HEAP_START) : 0);  // doubled
 #endif
 
+//! Objects at or above this GOAL offset are invalid, like END_OF_MEMORY in gcommon.gc (keep the two
+//! in sync).  ARM64 raises it to cover the debug heap and the signed AOT data and code, which sit
+//! above 128 MiB.
+#if defined(__APPLE__) && defined(__aarch64__)
+constexpr u32 END_OF_MEMORY = 0x40000000;
+#else
+constexpr u32 END_OF_MEMORY = 0x8000000;
+#endif
+
 //! Location of kglobalheap, kdebugheap kheapinfo structures.
 constexpr u32 GLOBAL_HEAP_INFO_ADDR = 0x13AD00;
 constexpr u32 DEBUG_HEAP_INFO_ADDR = 0x13AD10;

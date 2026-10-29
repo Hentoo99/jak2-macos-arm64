@@ -82,7 +82,20 @@ struct ArenaLayout {
 //! preserved, so the result is deterministic for a deterministic module list.
 ArenaLayout emit_arena_layout(std::span<const SignedModule> modules, const ArenaOptions& options);
 
+struct ExportBankOptions {
+  uint32_t function_type = 0;
+  uint32_t arg_count = 384;
+  uint32_t arg_pp_count = 32;
+  uint32_t stack_count = 32;
+  uint32_t mips2c_count = 256;
+};
+
+//! Signed C->GOAL stubs (see common/aot/SignedModuleIndex.h), replacing the
+//! trampolines the dynamic runtime writes into JIT memory.
+std::string emit_export_banks(const ExportBankOptions& options);
+
 //! C source with a table of every module's symbols, for the loader and tests.
-std::string emit_module_index(std::span<const SignedModule> modules, uint32_t function_type);
+std::string emit_module_index(std::span<const SignedModule> modules,
+                              const ExportBankOptions& banks);
 
 }  // namespace goal_aot

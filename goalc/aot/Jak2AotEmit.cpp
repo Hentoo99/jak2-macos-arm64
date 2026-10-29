@@ -6,9 +6,9 @@
  *                 [--data-base 0xa000000] [--data-limit 0xe000000]
  *                 [--arena-size 0x10000000] [--omit-debug]
  *
- * Writes DIR/modules/<symbol>.S, DIR/arena-layout.S, DIR/module-index.c and
- * DIR/manifest.json.  Link arena-layout before the modules so the __ARENA
- * segment precedes __GOAL.
+ * Writes DIR/modules/<symbol>.S, DIR/arena-layout.S, DIR/export-banks.S,
+ * DIR/module-index.c and DIR/manifest.json.  Link arena-layout before the
+ * modules and banks so the __ARENA segment precedes __GOAL.
  */
 
 #include <filesystem>
@@ -161,8 +161,10 @@ int main(int argc, char** argv) {
       }
     }
     write_file(options.output_dir / "arena-layout.S", layout.assembly);
-    write_file(options.output_dir / "module-index.c",
-               goal_aot::emit_module_index(modules, options.module.function_type));
+    goal_aot::ExportBankOptions banks;
+    banks.function_type = options.module.function_type;
+    write_file(options.output_dir / "export-banks.S", goal_aot::emit_export_banks(banks));
+    write_file(options.output_dir / "module-index.c", goal_aot::emit_module_index(modules, banks));
     write_file(options.output_dir / "manifest.json", manifest.dump(1) + "\n");
     std::cout << "jak2-aot-emit: " << modules.size() << " modules, " << code_bytes
               << " bytes of code, " << static_bytes << " bytes of static data\n";

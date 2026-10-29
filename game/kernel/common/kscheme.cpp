@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "common/aot/AotExecution.h"
 #include "common/goal_constants.h"
 #include "common/platform/BuildConfig.h"
 
@@ -135,22 +134,8 @@ uint64_t _call_goal_on_stack_asm_win32(u64 rsp, void* fptr, void* st_ptr, void* 
  * Calls from the parent stack.
  */
 u64 call_goal(Ptr<Function> f, u64 a, u64 b, u64 c, u64 st, void* offset) {
-#if OG_EXECUTION_MODE_AOT
-  if (!f.offset || !g_ee_main_mem ||
-      f.offset > EE_MAIN_MEM_SIZE - sizeof(goal_aot::FunctionDescriptor)) {
-    throw std::runtime_error("AOT call received an invalid function descriptor address");
-  }
-  const auto* descriptor = reinterpret_cast<const goal_aot::FunctionDescriptor*>(f.c());
-  const std::array args{a, b, c};
-  const auto result = goal_aot::execution_backend().invoke(
-      descriptor, args, st, 0, reinterpret_cast<std::uintptr_t>(offset));
-  if (!result) {
-    throw std::runtime_error(
-        std::string("AOT call failed: ") + goal_aot::invocation_error_name(result.error) +
-        " (" + goal_aot::resolve_error_name(result.resolve_error) + ")");
-  }
-  return result.value;
-#else
+  // Signed AOT code is called like dynamic code: GOAL function pointers are real offsets from the
+  // EE base, into the executable's signed __GOAL text (signed_aot.h).
   // auto st_ptr = (void*)((uint8_t*)(offset) + st); updated for the new compiler!
   void* st_ptr = (void*)st;
 
@@ -164,28 +149,12 @@ u64 call_goal(Ptr<Function> f, u64 a, u64 b, u64 c, u64 st, void* offset) {
 #elif _WIN32
   return _call_goal_asm_win32(a, b, c, fptr, st_ptr, offset);
 #endif
-#endif
 }
 
 /*!
  * Wrapper around _call_goal_asm_on_stack for switching stacks and calling a GOAL function there.
  */
 u64 call_goal_on_stack(Ptr<Function> f, u64 rsp, u64 st, void* offset) {
-#if OG_EXECUTION_MODE_AOT
-  if (!f.offset || !g_ee_main_mem ||
-      f.offset > EE_MAIN_MEM_SIZE - sizeof(goal_aot::FunctionDescriptor)) {
-    throw std::runtime_error("AOT stack call received an invalid function descriptor address");
-  }
-  const auto* descriptor = reinterpret_cast<const goal_aot::FunctionDescriptor*>(f.c());
-  const auto result = goal_aot::execution_backend().invoke(
-      descriptor, {}, st, rsp, reinterpret_cast<std::uintptr_t>(offset));
-  if (!result) {
-    throw std::runtime_error(
-        std::string("AOT stack call failed: ") + goal_aot::invocation_error_name(result.error) +
-        " (" + goal_aot::resolve_error_name(result.resolve_error) + ")");
-  }
-  return result.value;
-#else
   void* st_ptr = (void*)st;
 
   void* fptr = f.c();
@@ -197,7 +166,6 @@ u64 call_goal_on_stack(Ptr<Function> f, u64 rsp, u64 st, void* offset) {
   return _call_goal_on_stack_asm_arm64(rsp, 0, 0, fptr, st_ptr, offset);
 #elif _WIN32
   return _call_goal_on_stack_asm_win32(rsp, fptr, st_ptr, offset);
-#endif
 #endif
 }
 

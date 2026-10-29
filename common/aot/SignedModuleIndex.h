@@ -27,7 +27,27 @@ struct goal_aot_module {
   struct goal_aot_segment segments[3];
 };
 
+//! Signed C->GOAL stubs.  Each stub is a GOAL function (type tag, then code) at
+//! stubs + i * stride; its native target lives in the writable slots[i].
+enum goal_aot_bank_kind {
+  GOAL_AOT_BANK_ARG = 0,     // slot {target, 0}: x16 = target, then _arg_call_arm64
+  GOAL_AOT_BANK_ARG_PP = 1,  // as ARG, with x3 = pp
+  GOAL_AOT_BANK_STACK = 2,   // slot {target, 0}: x16 = target, then _stack_call_arm64
+  GOAL_AOT_BANK_MIPS2C = 3,  // slot {exec, stack size}: then _mips2c_call_arm64
+  GOAL_AOT_BANK_COUNT = 4
+};
+
+struct goal_aot_export_bank {
+  const uint8_t* stubs;
+  uint64_t* slots;  // two u64 per stub
+  uint32_t count;
+  uint32_t stride;
+};
+
 extern uint8_t goal_aot_arena[];
+extern const struct goal_aot_export_bank goal_aot_export_banks[GOAL_AOT_BANK_COUNT];
+extern const uint8_t goal_aot_nothing_stub[];  // type tag, then "ret"
+extern const uint8_t goal_aot_zero_stub[];     // type tag, then "mov x0, #0; ret"
 extern const struct goal_aot_module goal_aot_modules[];
 extern const uint32_t goal_aot_module_count;
 extern const uint32_t goal_aot_function_type;

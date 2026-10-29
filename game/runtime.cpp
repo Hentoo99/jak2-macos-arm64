@@ -25,6 +25,8 @@
 #include "common/platform/BuildConfig.h"
 #if OG_EXECUTION_MODE_AOT
 #include "common/data_memory.h"
+
+#include "game/kernel/common/signed_aot.h"
 #else
 #include "common/jit_memory.h"
 #endif
@@ -77,7 +79,7 @@ GameVersion g_game_version = GameVersion::Jak2;
 BackgroundWorker g_background_worker;
 int g_server_port = DECI2_PORT;
 #if OG_EXECUTION_MODE_AOT
-std::unique_ptr<data_memory::DataRegion> g_ee_main_region;
+// The EE memory is the executable's __ARENA segment (see signed_aot.h).
 #else
 std::unique_ptr<jit_memory::JitRegion> g_ee_main_region;
 #endif
@@ -143,13 +145,15 @@ void ee_runner(SystemThreadInterface& iface) {
     void* hint = EE_MEM_LOW_MAP ? reinterpret_cast<void*>(0x10000000)
                                 : reinterpret_cast<void*>(EE_MAIN_MEM_MAP);
 #if OG_EXECUTION_MODE_AOT
-    g_ee_main_region = std::make_unique<data_memory::DataRegion>(
-        data_memory::DataRegion::allocate(EE_MAIN_MEM_SIZE, hint));
+    // Signed GOAL code reaches its static data in this segment with ADRP, so the EE memory
+    // cannot be mapped anywhere else.
+    (void)hint;
+    g_ee_main_mem = signed_aot::arena_base();
 #else
     g_ee_main_region = std::make_unique<jit_memory::JitRegion>(
         jit_memory::JitRegion::allocate(EE_MAIN_MEM_SIZE, hint));
-#endif
     g_ee_main_mem = static_cast<u8*>(g_ee_main_region->data());
+#endif
   } catch (const std::system_error& error) {
     lg::error("Failed to initialize main memory: {}", error.what());
     iface.initialization_complete();
@@ -164,7 +168,10 @@ void ee_runner(SystemThreadInterface& iface) {
   iface.initialization_complete();
 
   lg::debug("[EE] Run!");
+#if !OG_EXECUTION_MODE_AOT
+  // The AOT arena is a zero-fill segment: clearing it would only commit 256 MiB of pages.
   memset((void*)g_ee_main_mem, 0, EE_MAIN_MEM_SIZE);
+#endif
 
   // prevent access to the first 512 kB of memory.
   // On the PS2 this is the kernel and can't be accessed either.
@@ -435,7 +442,9 @@ RuntimeExitStatus exec_runtime(GameLaunchOptions game_options, int argc, const c
     Gfx::Exit();
   }
   lg::info("GOAL Runtime Shutdown (code {})", fmt::underlying(MasterExit));
+#if !OG_EXECUTION_MODE_AOT
   g_ee_main_region.reset();
+#endif
   g_ee_main_mem = nullptr;
   Discord_Shutdown();
   return MasterExit;

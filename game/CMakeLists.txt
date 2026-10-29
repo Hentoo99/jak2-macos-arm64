@@ -222,6 +222,10 @@ if(OG_TARGET_IOS)
     list(APPEND RUNTIME_SOURCE external/discord_ios_stub.cpp)
 endif()
 
+if(OG_EXECUTION_MODE_AOT)
+    list(APPEND RUNTIME_SOURCE kernel/common/signed_aot.cpp)
+endif()
+
 add_subdirectory(sound)
 
 # we build the runtime as a static library.
@@ -242,6 +246,23 @@ endif()
 
 add_executable(gk main.cpp)
 target_link_libraries(gk runtime)
+if(OG_EXECUTION_MODE_AOT)
+    # Signed GOAL code from jak2-aot-emit (docs/ios/DECISIONI.md).  The arena layout is listed
+    # first so the linker places the __ARENA segment (the EE memory) before __GOAL, keeping all
+    # signed code within a u32 GOAL offset of the EE base.
+    if(OPENGOAL_AOT_GENERATED_DIR STREQUAL "")
+        message(FATAL_ERROR "AOT builds need OPENGOAL_AOT_GENERATED_DIR (jak2-aot-emit output)")
+    endif()
+    file(GLOB OG_AOT_MODULE_SOURCES CONFIGURE_DEPENDS "${OPENGOAL_AOT_GENERATED_DIR}/modules/*.S")
+    list(SORT OG_AOT_MODULE_SOURCES)
+    set(OG_AOT_ASM_SOURCES
+        "${OPENGOAL_AOT_GENERATED_DIR}/arena-layout.S"
+        "${OPENGOAL_AOT_GENERATED_DIR}/export-banks.S"
+        ${OG_AOT_MODULE_SOURCES})
+    set_source_files_properties(${OG_AOT_ASM_SOURCES} PROPERTIES LANGUAGE ASM)
+    target_sources(gk PRIVATE ${OG_AOT_ASM_SOURCES} "${OPENGOAL_AOT_GENERATED_DIR}/module-index.c")
+    target_link_options(gk PRIVATE "LINKER:-segprot,__ARENA,rw,rw" "LINKER:-segprot,__GOAL,rx,rx")
+endif()
 if(OPENGOAL_GRAPHICS_BACKEND STREQUAL "METAL")
     if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
         set(OG_METAL_SDK iphonesimulator)

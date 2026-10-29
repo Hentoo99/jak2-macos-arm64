@@ -67,7 +67,7 @@ if(OPENGOAL_EXECUTION_MODE STREQUAL "AOT" AND
             "OPENGOAL_AOT_GENERATED_DIR must be an existing generated-input directory: "
             "${OG_AOT_INPUT_DIR}")
     endif()
-    foreach(OG_AOT_REQUIRED_FILE manifest.json build-report.json)
+    foreach(OG_AOT_REQUIRED_FILE manifest.json module-index.c arena-layout.S export-banks.S)
         if(NOT EXISTS "${OG_AOT_INPUT_DIR}/${OG_AOT_REQUIRED_FILE}")
             message(FATAL_ERROR
                 "AOT generated input is missing ${OG_AOT_REQUIRED_FILE} in ${OG_AOT_INPUT_DIR}")

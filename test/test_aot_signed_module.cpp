@@ -164,7 +164,13 @@ TEST(AotSignedModule, ArenaLayoutPlacesDataInOrder) {
   goal_aot::ArenaOptions tiny{0x10000000, 0xa000000, 0xa000010, 256};
   EXPECT_THROW(goal_aot::emit_arena_layout(mods, tiny), std::runtime_error);
 
-  auto index = goal_aot::emit_module_index(mods, 0x1234);
+  goal_aot::ExportBankOptions banks;
+  banks.function_type = 0x1234;
+  auto index = goal_aot::emit_module_index(mods, banks);
   EXPECT_NE(index.find("const uint32_t goal_aot_module_count = 2;"), std::string::npos);
   EXPECT_NE(index.find("const uint32_t goal_aot_function_type = 0x1234;"), std::string::npos);
+  EXPECT_NE(index.find("goal_aot_export_banks[GOAL_AOT_BANK_COUNT]"), std::string::npos);
+  auto bank_asm = goal_aot::emit_export_banks(banks);
+  EXPECT_NE(bank_asm.find("_goal_aot_bank_mips2c:"), std::string::npos);
+  EXPECT_NE(bank_asm.find("add x17, x17, _stack_call_arm64@PAGEOFF"), std::string::npos);
 }

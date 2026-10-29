@@ -2,7 +2,7 @@
 # Sign the Jak 2 iOS app with a personal (free) Apple ID team, install it on a connected iPhone or
 # iPad, copy the game data pack into its Documents and launch it.  See docs/ios/DECISIONI.md.
 #
-#   scripts/install_jak2_ios_device.sh [DEVICE_NAME_OR_UDID]     (default: the first connected one)
+#   scripts/install_jak2_ios_device.sh [DEVICE_NAME_OR_UDID]     (default: the only connected one)
 #
 # One-time setup on the device: connect it with a cable, unlock it and trust this Mac; enable
 # Settings > Privacy & Security > Developer Mode.  After the first install, trust the developer in
@@ -33,6 +33,7 @@ DEVICE=$(python3 -I - "$DEVICES_JSON" "$DEVICE_ARG" <<'EOF'
 import json, sys
 devices = json.load(open(sys.argv[1]))["result"]["devices"]
 want = sys.argv[2]
+found = []
 for d in devices:
     props, hw = d.get("deviceProperties", {}), d.get("hardwareProperties", {})
     if hw.get("reality") != "physical" or hw.get("platform") != "iOS":
@@ -41,11 +42,17 @@ for d in devices:
         continue
     if d.get("connectionProperties", {}).get("tunnelState") == "unavailable" and not want:
         continue
-    print(hw["udid"])
-    break
+    found.append((hw["udid"], props.get("name", "")))
+if len(found) > 1:
+    # Picking one would install on a device the user is not looking at (and may be locked).
+    print("more than one device connected, pass its name:", file=sys.stderr)
+    for udid, name in found:
+        print(f'  scripts/install_jak2_ios_device.sh "{name}"', file=sys.stderr)
+elif found:
+    print(found[0][0])
 EOF
 )
-[ -n "$DEVICE" ] || { echo "no connected iOS device${DEVICE_ARG:+ named $DEVICE_ARG}" >&2; exit 1; }
+[ -n "$DEVICE" ] || { echo "no single connected iOS device${DEVICE_ARG:+ named $DEVICE_ARG}" >&2; exit 1; }
 echo "device: $DEVICE"
 
 # --- build ---------------------------------------------------------------------------------------

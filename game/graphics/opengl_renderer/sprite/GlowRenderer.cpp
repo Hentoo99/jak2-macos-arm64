@@ -1,5 +1,7 @@
 #include "GlowRenderer.h"
 
+#include "common/platform/BuildConfig.h"
+
 #include "third-party/imgui/imgui.h"
 
 /*
@@ -743,8 +745,11 @@ void GlowRenderer::probe_and_copy_new(SharedRenderState* render_state, ScopedPro
   render_state->shaders[ShaderId::GLOW_PROBE_READ].activate();
   glBindFramebuffer(GL_FRAMEBUFFER, m_ogl.downsample_fbos[0].fbo);
   glBindTexture(GL_TEXTURE_2D, m_ogl.probe_fbo_depth_tex);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  // OpenGL ES can't filter depth textures linearly: a GL_LINEAR depth texture is incomplete, reads
+  // as 0 and lets every probe pass, so all glows would show through walls.
+  const GLint depth_filter = goal_platform::kGles ? GL_NEAREST : GL_LINEAR;
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, depth_filter);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, depth_filter);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glViewport(0, 0, m_ogl.downsample_fbos[0].size, m_ogl.downsample_fbos[0].size);

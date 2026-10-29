@@ -20,7 +20,9 @@ uniform float deg_to_rad;
 uniform float inv_area;
 uniform vec4 basis_x;
 uniform vec4 basis_y;
-uniform vec4 xy_array[8];
+// The VU data block: xy_array (8), st_array (4), xyz_array (4) and hmge_scale.  2D sprites index it
+// with vert_id + flag, which runs past the 8 xy entries into the vectors after them, as on the PS2.
+uniform vec4 xy_array[17];
 uniform vec4 xyz_array[4];
 uniform vec4 st_array[4];
 
@@ -119,7 +121,7 @@ void main() {
     float sp_sin = sin(quat.z);
     float sp_cos = cos(quat.z);
 
-    vec4 xy0_vf19 = xy_array[vert_id + (flags_matrix.x & 15u)];
+    vec4 xy0_vf19 = xy_array[min(vert_id + (flags_matrix.x & 15u), 16u)];
     vec4 vf12_rotated = (basis_x * sp_cos) - (basis_y * sp_sin);
     vec4 vf13_rotated_trans = (basis_x * sp_sin) + (basis_y * sp_cos);
 
@@ -141,7 +143,7 @@ void main() {
     float sp_sin = sin(quat.z);
     float sp_cos = cos(quat.z);
 
-    vec4 xy0_vf19 = xy_array[vert_id + (flags_matrix.x & 15u)];
+    vec4 xy0_vf19 = xy_array[min(vert_id + (flags_matrix.x & 15u), 16u)];
     vec4 vf12_rotated = (basis_x * sp_cos) - (basis_y * sp_sin);
     vec4 vf13_rotated_trans = (basis_x * sp_sin) + (basis_y * sp_cos);
 

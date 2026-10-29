@@ -1,6 +1,7 @@
 #include "Sprite3.h"
 
 #include "common/log/log.h"
+#include "common/platform/BuildConfig.h"
 
 #include "game/graphics/opengl_renderer/background/background_common.h"
 #include "game/graphics/opengl_renderer/dma_helpers.h"
@@ -35,6 +36,13 @@ u32 process_sprite_chunk_header(DmaFollower& dma) {
 }
 
 constexpr int SPRITE_RENDERER_MAX_SPRITES = 1920 * 12;
+
+// Each sprite is a 4 vertex strip ended by a UINT32_MAX restart index.  ANGLE's Metal backend does
+// not restart these streamed strips (sprites join into long triangles across the screen), so GLES
+// builds draw each sprite as two triangles instead.
+constexpr bool kSpriteTriangles = goal_platform::kGles;
+constexpr u32 kIndicesPerSprite = kSpriteTriangles ? 6 : 5;
+constexpr GLenum kSpritePrimitive = kSpriteTriangles ? GL_TRIANGLES : GL_TRIANGLE_STRIP;
 }  // namespace
 
 Sprite3::Sprite3(const std::string& name, int my_id)
@@ -107,7 +115,7 @@ void Sprite3::opengl_setup_normal() {
   );
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-  u32 idx_buffer_len = SPRITE_RENDERER_MAX_SPRITES * 5;
+  u32 idx_buffer_len = SPRITE_RENDERER_MAX_SPRITES * kIndicesPerSprite;
   glGenBuffers(1, &m_ogl.index_buffer);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ogl.index_buffer);
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx_buffer_len * sizeof(u32), nullptr, GL_STREAM_DRAW);
@@ -236,7 +244,10 @@ void Sprite3::render_2d_group0(DmaFollower& dma,
   glUniform1f(glGetUniformLocation(shid, "inv_area"), m_frame_data.inv_area);
   glUniformMatrix4fv(glGetUniformLocation(shid, "camera"), 1, GL_FALSE,
                      m_3d_matrix_data.camera.data());
-  glUniform4fv(glGetUniformLocation(shid, "xy_array"), 8, m_frame_data.xy_array[0].data());
+  // xy_array through hmge_scale, contiguous like the VU data the shader indexes past xy_array.
+  static_assert(offsetof(SpriteFrameData, hmge_scale) - offsetof(SpriteFrameData, xy_array) ==
+                16 * sizeof(math::Vector4f));
+  glUniform4fv(glGetUniformLocation(shid, "xy_array"), 17, m_frame_data.xy_array[0].data());
   glUniform4fv(glGetUniformLocation(shid, "xyz_array"), 4, m_frame_data.xyz_array[0].data());
   glUniform4fv(glGetUniformLocation(shid, "st_array"), 4, m_frame_data.st_array[0].data());
   glUniform4fv(glGetUniformLocation(shid, "basis_x"), 1, m_frame_data.basis_x.data());
@@ -632,9 +643,9 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
     glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "tex_T0"), 0);
 
     prof.add_draw_call();
-    prof.add_tri(2 * (bucket->ids.size() / 5));
+    prof.add_tri(2 * (bucket->ids.size() / kIndicesPerSprite));
 
-    glDrawElements(GL_TRIANGLE_STRIP, bucket->ids.size(), GL_UNSIGNED_INT,
+    glDrawElements(kSpritePrimitive, bucket->ids.size(), GL_UNSIGNED_INT,
                    (void*)(bucket->offset_in_idx_buffer * sizeof(u32)));
 
     if (double_draw) {
@@ -643,7 +654,7 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
           break;
         case DoubleDrawKind::AFAIL_NO_DEPTH_WRITE:
           prof.add_draw_call();
-          prof.add_tri(2 * (bucket->ids.size() / 5));
+          prof.add_tri(2 * (bucket->ids.size() / kIndicesPerSprite));
           glUniform1f(
               glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_min"),
               -10.f);
@@ -651,7 +662,7 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
               glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_max"),
               settings.aref_second);
           glDepthMask(GL_FALSE);
-          glDrawElements(GL_TRIANGLE_STRIP, bucket->ids.size(), GL_UNSIGNED_INT,
+          glDrawElements(kSpritePrimitive, bucket->ids.size(), GL_UNSIGNED_INT,
                          (void*)(bucket->offset_in_idx_buffer * sizeof(u32)));
           break;
         default:
@@ -830,11 +841,17 @@ void Sprite3::do_block_common(SpriteMode mode,
       }
     }
     u32 start_vtx_id = m_sprite_idx * 4;
-    bucket->ids.push_back(start_vtx_id);
-    bucket->ids.push_back(start_vtx_id + 1);
-    bucket->ids.push_back(start_vtx_id + 2);
-    bucket->ids.push_back(start_vtx_id + 3);
-    bucket->ids.push_back(UINT32_MAX);
+    if constexpr (kSpriteTriangles) {
+      for (u32 v : {0, 1, 2, 2, 1, 3}) {
+        bucket->ids.push_back(start_vtx_id + v);
+      }
+    } else {
+      bucket->ids.push_back(start_vtx_id);
+      bucket->ids.push_back(start_vtx_id + 1);
+      bucket->ids.push_back(start_vtx_id + 2);
+      bucket->ids.push_back(start_vtx_id + 3);
+      bucket->ids.push_back(UINT32_MAX);
+    }
 
     auto& vert1 = m_vertices_3d.at(start_vtx_id + 0);
 
